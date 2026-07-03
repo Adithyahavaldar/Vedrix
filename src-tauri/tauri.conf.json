@@ -1,0 +1,109 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "Sutra",
+  "version": "0.9.0",
+  "identifier": "com.adithya.sutra",
+  "build": {
+    "frontendDist": "../src"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "Sutra",
+        "width": 1160,
+        "height": 820,
+        "minWidth": 640,
+        "minHeight": 480,
+        "resizable": true,
+        "fullscreen": false,
+        "dragDropEnabled": true
+      }
+    ],
+    "security": {
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": {
+          "allow": [
+            "**"
+          ],
+          "requireLiteralLeadingDot": false
+        }
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "app",
+      "dmg"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "fileAssociations": [
+      {
+        "ext": [
+          "md",
+          "markdown",
+          "mdown"
+        ],
+        "name": "Markdown",
+        "description": "Markdown document",
+        "role": "Viewer",
+        "mimeType": "text/markdown"
+      },
+      {
+        "ext": [
+          "pdf"
+        ],
+        "name": "PDF",
+        "description": "PDF document",
+        "role": "Viewer",
+        "mimeType": "application/pdf"
+      },
+      {
+        "ext": [
+          "docx"
+        ],
+        "name": "Word document",
+        "description": "Word document",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "pptx"
+        ],
+        "name": "PowerPoint presentation",
+        "description": "PowerPoint presentation",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "xlsx",
+          "xls",
+          "csv"
+        ],
+        "name": "Spreadsheet",
+        "description": "Spreadsheet",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "txt",
+          "log",
+          "json"
+        ],
+        "name": "Text",
+        "description": "Plain text",
+        "role": "Viewer",
+        "mimeType": "text/plain"
+      }
+    ]
+  }
+}
