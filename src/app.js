@@ -1475,7 +1475,7 @@ function applyRichState(t) {
   contentEl.contentEditable = rich ? 'true' : 'false';
   document.body.classList.toggle('rich-editing', rich);
   $('edit-toolbar').hidden = !rich;
-  if (!rich) { closeLinkPop(); }
+  if (!rich) { closeLinkPop(); closeSlashMenu(); $('sel-bubble').hidden = true; }
   const pill = $('edit-pill');
   pill.hidden = !(t && t.editing && TEXT_KINDS.includes(t.kind));
   if (!pill.hidden) {
@@ -1750,6 +1750,215 @@ function applyLink() {
   closeLinkPop();
 }
 
+/* ---------- Selection bubble (floating mini-toolbar) ---------- */
+
+function updateSelBubble() {
+  const bubble = $('sel-bubble');
+  if (!isRichEditing() || slashState.active) { bubble.hidden = true; return; }
+  const s = getSelection();
+  if (!s.rangeCount || s.getRangeAt(0).collapsed) { bubble.hidden = true; return; }
+  const r = s.getRangeAt(0);
+  if (!contentEl.contains(r.commonAncestorContainer)) { bubble.hidden = true; return; }
+  const el = selElement();
+  if (el && el.closest('pre')) { bubble.hidden = true; return; } // not in code blocks
+  const rect = r.getBoundingClientRect();
+  if (!rect.width && !rect.height) { bubble.hidden = true; return; }
+  const mainRect = $('main').getBoundingClientRect();
+  bubble.hidden = false;
+  const bw = bubble.offsetWidth || 180;
+  bubble.style.left = Math.max(8, Math.min(rect.left + rect.width / 2 - bw / 2 - mainRect.left, mainRect.width - bw - 8)) + 'px';
+  bubble.style.top = Math.max(6, rect.top - mainRect.top - bubble.offsetHeight - 8) + 'px';
+}
+
+function wireSelBubble() {
+  const bubble = $('sel-bubble');
+  bubble.addEventListener('mousedown', (e) => e.preventDefault()); // keep selection
+  bubble.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-cmd]');
+    if (btn && EDITOR_CMDS[btn.dataset.cmd]) {
+      EDITOR_CMDS[btn.dataset.cmd]();
+      updateSelBubble();
+    }
+  });
+}
+
+/* ---------- Slash menu ("/" block palette) ---------- */
+
+const SLASH_ITEMS = [
+  { k: 'text paragraph', label: 'Paragraph', hint: 'Plain text', run: () => setBlockType('p') },
+  { k: 'heading 1 h1 title', label: 'Heading 1', hint: '# Large heading', run: () => setBlockType('h1') },
+  { k: 'heading 2 h2', label: 'Heading 2', hint: '## Section heading', run: () => setBlockType('h2') },
+  { k: 'heading 3 h3', label: 'Heading 3', hint: '### Subsection', run: () => setBlockType('h3') },
+  { k: 'quote blockquote', label: 'Quote', hint: '> Quoted text', run: () => setBlockType('blockquote') },
+  { k: 'code block pre', label: 'Code block', hint: 'Monospaced block', run: () => setBlockType('pre') },
+  { k: 'bullet list ul', label: 'Bullet list', hint: '- item', run: () => document.execCommand('insertUnorderedList') },
+  { k: 'numbered ordered list ol', label: 'Numbered list', hint: '1. item', run: () => document.execCommand('insertOrderedList') },
+  { k: 'todo task checkbox', label: 'To-do', hint: '- [ ] task', run: toggleTask },
+  { k: 'table grid', label: 'Table', hint: '3×3 with header', run: insertTable },
+  { k: 'divider rule hr', label: 'Divider', hint: 'Horizontal rule', run: () => insertBlockAfterCurrent(document.createElement('hr')) },
+  { k: 'image picture photo', label: 'Image', hint: 'From a file', run: null /* async special */ },
+  { k: 'math equation katex', label: 'Math block', hint: '$$ … $$', run: insertMathBlock },
+  { k: 'diagram mermaid flowchart', label: 'Diagram', hint: 'Mermaid block', run: insertMermaidBlock },
+];
+
+const slashState = { active: false, query: '', sel: null, idx: 0 };
+
+function openSlashMenu() {
+  slashState.active = true;
+  slashState.query = '';
+  slashState.idx = 0;
+  $('sel-bubble').hidden = true;
+  renderSlashMenu();
+}
+
+function closeSlashMenu() {
+  slashState.active = false;
+  $('slash-menu').hidden = true;
+}
+
+function slashMatches() {
+  const q = slashState.query.toLowerCase();
+  return SLASH_ITEMS.filter(it => !q || it.k.includes(q) || it.label.toLowerCase().includes(q));
+}
+
+function renderSlashMenu() {
+  const menu = $('slash-menu');
+  const items = slashMatches();
+  if (!items.length) { closeSlashMenu(); return; }
+  slashState.idx = Math.min(slashState.idx, items.length - 1);
+  menu.innerHTML = '';
+  items.forEach((it, i) => {
+    const b = document.createElement('button');
+    b.className = i === slashState.idx ? 'sel' : '';
+    b.innerHTML = `<span class="sl-label"></span><span class="sl-hint"></span>`;
+    b.querySelector('.sl-label').textContent = it.label;
+    b.querySelector('.sl-hint').textContent = it.hint;
+    b.addEventListener('mousedown', (e) => e.preventDefault());
+    b.addEventListener('click', () => acceptSlash(it));
+    menu.appendChild(b);
+  });
+  // position at the caret
+  const s = getSelection();
+  let rect = null;
+  if (s.rangeCount) rect = s.getRangeAt(0).getBoundingClientRect();
+  if (!rect || (!rect.width && !rect.height && !rect.top)) {
+    const blk = currentBlock();
+    rect = blk ? blk.getBoundingClientRect() : contentEl.getBoundingClientRect();
+  }
+  const mainRect = $('main').getBoundingClientRect();
+  menu.hidden = false;
+  menu.style.left = Math.max(8, Math.min(rect.left - mainRect.left, mainRect.width - 280)) + 'px';
+  menu.style.top = Math.min(rect.bottom - mainRect.top + 6, mainRect.height - menu.offsetHeight - 8) + 'px';
+}
+
+function deleteSlashText() {
+  // remove the typed "/query" by walking back from the LIVE caret — robust
+  // against node splits and element-relative bookmarks (empty paragraphs)
+  try {
+    const s = getSelection();
+    if (!s.rangeCount) return;
+    const r = s.getRangeAt(0);
+    let node = r.startContainer, off = r.startOffset;
+    if (node.nodeType !== 3) {
+      node = node.childNodes[Math.max(0, off - 1)];
+      while (node && node.nodeType !== 3 && node.lastChild) node = node.lastChild;
+      if (!node || node.nodeType !== 3) return;
+      off = node.length;
+    }
+    const len = 1 + slashState.query.length;
+    const del = document.createRange();
+    del.setStart(node, Math.max(0, off - len));
+    del.setEnd(node, off);
+    del.deleteContents();
+    s.removeAllRanges();
+    s.addRange(del);
+  } catch (_) {}
+}
+
+function acceptSlash(item) {
+  closeSlashMenu();
+  if (item.label === 'Image') {
+    execEditorCmd(deleteSlashText);
+    insertImage().then(() => { historySnapshot(); onRichInput(); });
+    return;
+  }
+  execEditorCmd(() => { deleteSlashText(); item.run(); });
+}
+
+function handleSlashKeydown(e) {
+  if (!slashState.active) return false;
+  const items = slashMatches();
+  if (e.key === 'Escape') { e.preventDefault(); closeSlashMenu(); return true; }
+  if (e.key === 'ArrowDown') { e.preventDefault(); slashState.idx = (slashState.idx + 1) % items.length; renderSlashMenu(); return true; }
+  if (e.key === 'ArrowUp') { e.preventDefault(); slashState.idx = (slashState.idx - 1 + items.length) % items.length; renderSlashMenu(); return true; }
+  if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); if (items[slashState.idx]) acceptSlash(items[slashState.idx]); return true; }
+  if (e.key === 'Backspace') {
+    if (!slashState.query) { closeSlashMenu(); return false; } // let it delete the "/"
+    slashState.query = slashState.query.slice(0, -1);
+    setTimeout(renderSlashMenu, 0);
+    return false; // let the char delete in the document too
+  }
+  if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    if (e.key === ' ') { closeSlashMenu(); return false; }
+    slashState.query += e.key;
+    setTimeout(renderSlashMenu, 0);
+    return false; // type through into the document
+  }
+  return false;
+}
+
+/* ---------- Markdown autoformat while typing ---------- */
+
+const AUTOFORMAT = {
+  '#': () => setBlockType('h1'),
+  '##': () => setBlockType('h2'),
+  '###': () => setBlockType('h3'),
+  '####': () => setBlockType('h4'),
+  '>': () => setBlockType('blockquote'),
+  '-': () => document.execCommand('insertUnorderedList'),
+  '*': () => document.execCommand('insertUnorderedList'),
+  '1.': () => document.execCommand('insertOrderedList'),
+  '[]': () => toggleTask(),
+  '```': () => setBlockType('pre'),
+};
+
+function tryAutoformat() {
+  // caret must sit right after a pattern at the very start of a paragraph
+  const s = getSelection();
+  if (!s.rangeCount || !s.getRangeAt(0).collapsed) return false;
+  const r = s.getRangeAt(0);
+  const node = r.startContainer;
+  if (node.nodeType !== 3) return false;
+  const blk = currentBlock();
+  if (!blk || blk.tagName !== 'P') return false;
+  if (node.parentElement.closest('pre, code')) return false;
+  const before = node.data.slice(0, r.startOffset);
+  if (blk.textContent.slice(0, before.length) !== before) return false; // not at block start
+  const fn = AUTOFORMAT[before.trim()];
+  if (!fn || before.trim() !== before) return false;
+  execEditorCmd(() => {
+    node.data = node.data.slice(r.startOffset);
+    placeCaret(blk, true);
+    fn();
+  });
+  return true;
+}
+
+function wireRichTyping() {
+  contentEl.addEventListener('keydown', (e) => {
+    if (!isRichEditing()) return;
+    if (handleSlashKeydown(e)) return;
+    if (e.key === '/' && !slashState.active) {
+      const el = selElement();
+      if (el && el.closest('pre, code')) return; // no slash menu in code
+      setTimeout(openSlashMenu, 0);              // open after "/" inserts
+      return;
+    }
+    if (e.key === ' ' && tryAutoformat()) { e.preventDefault(); }
+  });
+  contentEl.addEventListener('blur', () => setTimeout(() => { if (!document.activeElement.closest('#slash-menu')) closeSlashMenu(); }, 150));
+}
+
 /* ---------- Toolbar dispatch + state ---------- */
 
 function execEditorCmd(fn) {
@@ -1815,7 +2024,7 @@ function wireEditorToolbar() {
   document.addEventListener('selectionchange', () => {
     if (!isRichEditing()) return;
     clearTimeout(window._tbStateTimer);
-    window._tbStateTimer = setTimeout(updateToolbarState, 120);
+    window._tbStateTimer = setTimeout(() => { updateToolbarState(); updateSelBubble(); }, 120);
   });
   $('link-apply').addEventListener('click', applyLink);
   $('link-remove').addEventListener('click', () => { $('link-input').value = ''; applyLink(); });
@@ -2836,6 +3045,8 @@ function wireGlobal() {
   });
   wireFind();
   wireEditorToolbar();
+  wireSelBubble();
+  wireRichTyping();
   wireZoom();
   wireMap();
   wireAi();

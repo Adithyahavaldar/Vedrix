@@ -10,8 +10,8 @@
 <link rel="stylesheet" href="vendor/hljs-github-dark.css" id="css-hl-dark" disabled>
 <link rel="stylesheet" href="vendor/katex.min.css">
 <link rel="stylesheet" href="vendor/codemirror.css">
-<link rel="stylesheet" href="app.css?v=109">
-<link rel="stylesheet" href="themes.css?v=109">
+<link rel="stylesheet" href="app.css?v=111">
+<link rel="stylesheet" href="themes.css?v=111">
 </head>
 <body>
   <div id="topbar" data-tauri-drag-region>
@@ -78,6 +78,16 @@
     <button id="link-apply" class="icon-btn" title="Apply">✓</button>
     <button id="link-remove" class="icon-btn" title="Remove link">✕</button>
   </div>
+
+  <div id="sel-bubble" hidden>
+    <button data-cmd="bold" title="Bold (⌘B)"><b>B</b></button>
+    <button data-cmd="italic" title="Italic (⌘I)"><i>I</i></button>
+    <button data-cmd="strike" title="Strikethrough"><s>S</s></button>
+    <button data-cmd="code" title="Inline code" class="tb-mono">&lt;/&gt;</button>
+    <button data-cmd="link" title="Link (⌘K)">🔗</button>
+  </div>
+
+  <div id="slash-menu" hidden></div>
 
   <div id="overflow-menu" hidden>
     <button data-act="open">Open file…</button>
@@ -315,6 +325,6 @@
   window.pdfjsLib = pdfjsLib;
   window.dispatchEvent(new Event('pdfjs-ready'));
 </script>
-<script src="app.js?v=109"></script>
+<script src="app.js?v=111"></script>
 </body>
 </html>
