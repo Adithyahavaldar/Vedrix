@@ -474,7 +474,17 @@ function highlightPagedToc(t) {
 function renderActive() {
   const t = activeTab();
   $('live-badge').classList.toggle('on', !!(t && t.live && !t.editing));
-  $('reader-btn').hidden = !(t && t.kind === 'pdf');
+  const rb = $('reader-btn');
+  rb.hidden = !(t && (t.kind === 'pdf' || t.kind === 'html'));
+  if (t && t.kind === 'html') {
+    const live = effectiveHtmlMode(t) === 'live';
+    rb.textContent = live ? 'Aa' : '⚡';
+    rb.title = live ? 'Reader mode — read, search, and export this page'
+                    : 'Interactive mode — run the page with scripts';
+  } else if (t && t.kind === 'pdf') {
+    rb.textContent = 'Aa';
+    rb.title = 'Reading mode — convert this PDF to Markdown';
+  }
   $('edit-btn').hidden = !isEditable(t);
   $('map-btn').hidden = !(t && t.kind !== 'unsupported');
   markActiveFile();
@@ -543,16 +553,56 @@ function renderActive() {
 
 /* ---------- HTML documents (sandboxed frame — page keeps its own CSS) ---------- */
 
+/* HTML tabs have two modes:
+   - 'live'   (default): scripts RUN. Real file paths load as an asset-protocol
+     URL, so relative css/js/images — whole site prototypes — work. Isolation
+     comes from the browser origin model: the asset origin is cross-origin
+     from the app, so page JS can never reach Sutra's window/IPC/storage.
+     Pathless HTML (browser mode, Android content URIs) runs via srcdoc in an
+     OPAQUE origin (sandbox="allow-scripts" only — never with allow-same-origin).
+   - 'reader': today's script-stripped sandbox; TOC/⌘F/export work. */
+
+function effectiveHtmlMode(t) {
+  return t.htmlMode || 'live';
+}
+
+function toggleHtmlMode() {
+  const t = activeTab();
+  if (!t || t.kind !== 'html') return;
+  t.htmlMode = effectiveHtmlMode(t) === 'live' ? 'reader' : 'live';
+  renderActive();
+}
+
 function renderHtmlDoc(t) {
   clearToc();
+  const live = effectiveHtmlMode(t) === 'live';
   contentEl.classList.add('html-host');
+  contentEl.classList.toggle('html-live', live);
   contentEl.innerHTML = '';
   const f = document.createElement('iframe');
   f.className = 'html-frame';
-  // no allow-scripts: page JS never runs. allow-same-origin lets us read the
-  // doc for TOC/search and size the frame to its content.
+
+  if (live) {
+    if (TAURI && t.path && !t.path.startsWith('content://')) {
+      // real URL: relative assets + multi-file prototypes resolve from disk.
+      // allow-same-origin = the frame's OWN asset origin (cross-origin from
+      // the app, so the parent stays unreachable). No allow-top-navigation.
+      f.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-modals');
+      f.src = TAURI.core.convertFileSrc(t.path) + '?mv=' + (t.mtime || 0);
+    } else {
+      // no real path: run the markup in an opaque origin. Scripts run;
+      // parent, storage, and relative files are all unreachable.
+      f.setAttribute('sandbox', 'allow-scripts allow-forms allow-modals');
+      f.srcdoc = t.rawHtml || '';
+    }
+    t._frame = f;
+    contentEl.appendChild(f);
+    return; // cross-origin/opaque: no TOC/resize/find access by design
+  }
+
+  // ---- reader mode: script-stripped, same-origin so TOC/find/height work ----
   f.setAttribute('sandbox', 'allow-same-origin');
-  let src = t.rawHtml || '';
+  let src = DOMPurify.sanitize(t.rawHtml || '', { WHOLE_DOCUMENT: true });
   if (TAURI && t.path && !t.path.startsWith('content://')) {
     const dir = t.path.slice(0, t.path.lastIndexOf('/') + 1);
     const base = `<base href="${TAURI.core.convertFileSrc(dir)}/">`;
@@ -1278,6 +1328,12 @@ async function runFind(q) {
       while (txt && (i = txt.indexOf(lq, i)) !== -1) { findState.pdfMatches.push({ page: p }); i += lq.length; }
     });
     if (findState.pdfMatches.length) gotoMatch(1); else updateFindCount();
+    return;
+  }
+
+  // interactive HTML frames are cross-origin/opaque — search needs Reader mode
+  if (t.kind === 'html' && effectiveHtmlMode(t) === 'live') {
+    $('find-count').textContent = 'Reader mode only';
     return;
   }
 
@@ -2317,7 +2373,13 @@ function toggleOverflowMenu(show) {
   if (open) {
     const t = activeTab();
     m.querySelector('[data-act="map"]').classList.toggle('hide', !(t && t.kind !== 'unsupported'));
-    m.querySelector('[data-act="reader"]').classList.toggle('hide', !(t && t.kind === 'pdf'));
+    const readerItem = m.querySelector('[data-act="reader"]');
+    readerItem.classList.toggle('hide', !(t && (t.kind === 'pdf' || t.kind === 'html')));
+    if (t && t.kind === 'html') {
+      readerItem.textContent = effectiveHtmlMode(t) === 'live' ? 'Reader mode' : 'Interactive mode';
+    } else {
+      readerItem.textContent = 'Reading mode';
+    }
     m.querySelector('[data-act="edit"]').classList.toggle('hide', !isEditable(t));
     m.querySelector('[data-act="find"]').classList.toggle('hide', !t);
   }
@@ -2328,7 +2390,10 @@ const OVERFLOW_ACTIONS = {
   open: openViaPicker,
   ai: toggleAiPanel,
   map: toggleMap,
-  reader: openReadingMode,
+  reader: () => {
+    const t = activeTab();
+    if (t && t.kind === 'html') toggleHtmlMode(); else openReadingMode();
+  },
   edit: toggleEdit,
   find: openFind,
   history: () => { $('history-panel').hidden = false; },
@@ -2381,12 +2446,22 @@ function wireMobile() {
   });
 }
 
+// isolation self-check: the demo dashboard postMessages what it can see
+window.addEventListener('message', (e) => {
+  if (e.data && e.data.mvIsolation) {
+    diag('html-live isolation: tauri=' + e.data.tauri + ' parentDom=' + e.data.parentDom + ' storage=' + e.data.storage);
+  }
+});
+
 function wireGlobal() {
   $('open-btn').addEventListener('click', openViaPicker);
   $('new-tab').addEventListener('click', openViaPicker);
   $('toc-toggle').addEventListener('click', toggleSidebar);
   $('edit-btn').addEventListener('click', toggleEdit);
-  $('reader-btn').addEventListener('click', openReadingMode);
+  $('reader-btn').addEventListener('click', () => {
+    const t = activeTab();
+    if (t && t.kind === 'html') toggleHtmlMode(); else openReadingMode();
+  });
   $('pill-rich').addEventListener('click', () => setEditSurface('rich'));
   $('pill-source').addEventListener('click', () => setEditSurface('source'));
   $('pill-done').addEventListener('click', toggleEdit);

@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Interactive Dashboard Demo</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, 'Segoe UI', sans-serif; margin: 0; background: #0f1420; color: #e8eaf0; padding: 24px; }
+  h1 { margin: 0 0 4px; font-size: 22px; }
+  .sub { color: #8b93a8; font-size: 13px; margin-bottom: 20px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px; margin-bottom: 20px; }
+  .kpi { background: #1a2233; border-radius: 12px; padding: 16px; }
+  .kpi .label { font-size: 12px; color: #8b93a8; }
+  .kpi .value { font-size: 26px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .kpi .delta { font-size: 12px; margin-top: 2px; }
+  .up { color: #4ade80; } .down { color: #f87171; }
+  .panel { background: #1a2233; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+  canvas { width: 100%; height: 220px; }
+  button { font: inherit; background: #e8b34b; color: #0f1420; border: none; border-radius: 8px; padding: 9px 18px; font-weight: 600; cursor: pointer; margin-right: 8px; }
+  button.ghost { background: #263042; color: #e8eaf0; }
+  #log { font-family: ui-monospace, monospace; font-size: 12px; color: #8b93a8; margin-top: 10px; min-height: 18px; }
+  input[type=range] { width: 200px; accent-color: #e8b34b; }
+</style>
+</head>
+<body>
+  <h1>Ops Dashboard <span style="font-size:12px;background:#4ade80;color:#0f1420;border-radius:999px;padding:2px 10px;vertical-align:middle">LIVE</span></h1>
+  <div class="sub">Every number below is driven by JavaScript running inside Sutra's interactive HTML mode.</div>
+
+  <div class="grid">
+    <div class="kpi"><div class="label">Requests / s</div><div class="value" id="k1">—</div><div class="delta up" id="d1"></div></div>
+    <div class="kpi"><div class="label">P95 latency</div><div class="value" id="k2">—</div><div class="delta" id="d2"></div></div>
+    <div class="kpi"><div class="label">Error rate</div><div class="value" id="k3">—</div><div class="delta" id="d3"></div></div>
+    <div class="kpi"><div class="label">Clicks counted</div><div class="value" id="k4">0</div><div class="delta">interactivity proof</div></div>
+  </div>
+
+  <div class="panel">
+    <canvas id="chart" width="900" height="220"></canvas>
+  </div>
+
+  <div class="panel">
+    <button id="btn">Click me</button>
+    <button class="ghost" id="pause">Pause stream</button>
+    <label style="margin-left:12px;font-size:13px">Noise <input type="range" id="noise" min="1" max="40" value="12"></label>
+    <div id="log">Buttons, sliders, timers, canvas — all live.</div>
+  </div>
+
+<script>
+  // --- isolation self-report: tell the parent what this page can reach ---
+  let tauri = 'unreachable', parentDom = 'unreachable', storage = 'unreachable';
+  try { tauri = typeof window.__TAURI__ === 'undefined' ? 'not-injected' : 'INJECTED!'; } catch (e) {}
+  try { void window.parent.document; parentDom = 'ACCESSIBLE!'; } catch (e) {}
+  try { localStorage.setItem('x', '1'); storage = 'own-origin-ok'; } catch (e) { storage = 'blocked(opaque)'; }
+  try { parent.postMessage({ mvIsolation: 1, tauri, parentDom, storage }, '*'); } catch (e) {}
+
+  // --- live data stream ---
+  const data = Array.from({ length: 60 }, () => 40 + Math.random() * 20);
+  let clicks = 0, paused = false;
+  const $ = id => document.getElementById(id);
+
+  $('btn').addEventListener('click', () => {
+    clicks++;
+    $('k4').textContent = clicks;
+    $('log').textContent = 'Click #' + clicks + ' handled at ' + new Date().toLocaleTimeString();
+  });
+  $('pause').addEventListener('click', () => {
+    paused = !paused;
+    $('pause').textContent = paused ? 'Resume stream' : 'Pause stream';
+  });
+
+  function draw() {
+    const c = $('chart'), x = c.getContext('2d');
+    const W = c.width = c.clientWidth * devicePixelRatio, H = c.height = 220 * devicePixelRatio;
+    x.clearRect(0, 0, W, H);
+    // grid
+    x.strokeStyle = '#263042'; x.lineWidth = 1;
+    for (let i = 1; i < 5; i++) { x.beginPath(); x.moveTo(0, H * i / 5); x.lineTo(W, H * i / 5); x.stroke(); }
+    // area
+    const step = W / (data.length - 1);
+    x.beginPath();
+    data.forEach((v, i) => { const y = H - (v / 100) * H; i ? x.lineTo(i * step, y) : x.moveTo(0, y); });
+    x.strokeStyle = '#e8b34b'; x.lineWidth = 2 * devicePixelRatio; x.stroke();
+    x.lineTo(W, H); x.lineTo(0, H); x.closePath();
+    x.fillStyle = 'rgba(232,179,75,.12)'; x.fill();
+  }
+
+  setInterval(() => {
+    if (paused) return;
+    const noise = +$('noise').value;
+    data.push(Math.max(5, Math.min(95, data[data.length - 1] + (Math.random() - 0.5) * noise)));
+    data.shift();
+    const cur = data[data.length - 1];
+    $('k1').textContent = Math.round(cur * 42);
+    $('d1').textContent = '▲ ' + (Math.random() * 4).toFixed(1) + '%';
+    $('k2').textContent = (120 + cur).toFixed(0) + ' ms';
+    $('k3').textContent = (cur / 400).toFixed(2) + ' %';
+    draw();
+  }, 700);
+  draw();
+</script>
+</body>
+</html>

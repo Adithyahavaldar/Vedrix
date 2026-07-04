@@ -675,6 +675,11 @@ body.editing #scroller { flex: 1; }
 .markdown-body.html-host { max-width: none; padding: 0; }
 .html-frame { display: block; width: 100%; border: 0; background: #fff; min-height: 200px; }
 
+/* interactive (live) mode: the frame fills the pane and owns its scrolling */
+.markdown-body.html-host.html-live { height: 100%; }
+.html-live .html-frame { height: 100%; min-height: 0; }
+#scroller:has(.html-live) { overflow: hidden; }
+
 /* ---- Edit pill (Text / Source / Done) ---- */
 #edit-pill {
   position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%);
