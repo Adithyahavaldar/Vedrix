@@ -339,6 +339,8 @@ function showPane(pane) {
   unsupportedEl.hidden = pane !== 'unsupported';
   $('mapview').hidden = pane !== 'map';
   $('graphview').hidden = pane !== 'graph';
+  $('home').hidden = pane !== 'home';
+  $('sidebar').style.display = pane === 'home' ? 'none' : '';
 }
 
 function slugify(text, used) {
@@ -457,6 +459,91 @@ function syncProjPreview() {
 function colorTint(hex, a) {
   const n = parseInt(hex.slice(1), 16);
   return `rgba(${n >> 16 & 255},${n >> 8 & 255},${n & 255},${a})`;
+}
+
+/* ============================================================
+   Home / Projects dashboard (D4)
+   ============================================================ */
+
+let homeShown = false;
+
+function greeting() {
+  // no Date.now allowed in some contexts, but here it's fine (browser)
+  const h = new Date().getHours();
+  const g = h < 5 ? 'Good night' : h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
+  return settings.profileName ? `${g}, ${settings.profileName}` : g;
+}
+
+function showHome() {
+  homeShown = true;
+  renderHome();
+  showPane('home');
+  $('context-bar').hidden = true;
+  document.querySelectorAll('#nav-rail .nr-btn').forEach(b => b.classList.toggle('sel', b.dataset.nav === 'home'));
+}
+
+function hideHome() {
+  homeShown = false;
+  document.querySelectorAll('#nav-rail .nr-btn').forEach(b => b.classList.remove('sel'));
+  renderActive();
+}
+
+function renderHome() {
+  $('home-greeting').textContent = greeting();
+  const nDocs = new Set(Object.keys(library.assign)).size;
+  $('home-sub').textContent = `${library.projects.length} project${library.projects.length === 1 ? '' : 's'} · ${recents.length} recent file${recents.length === 1 ? '' : 's'}`;
+  // project cards
+  const pc = $('home-projects'); pc.innerHTML = '';
+  if (!library.projects.length) {
+    pc.innerHTML = `<button class="home-proj-empty" id="home-proj-empty">＋ Create your first project<span>Group documents with a color and icon</span></button>`;
+    pc.querySelector('#home-proj-empty').addEventListener('click', () => openProjectModal((id) => { projectsOpen.add(id); renderHome(); }));
+  } else {
+    for (const p of library.projects) {
+      const docs = docsInProject(p.id);
+      const card = document.createElement('button');
+      card.className = 'home-card';
+      card.style.setProperty('--pc', p.color);
+      card.innerHTML = `<span class="hc-bar"></span><span class="hc-icon">${projIconSvg(p.icon)}</span><span class="hc-name"></span><span class="hc-meta">${docs.length} doc${docs.length === 1 ? '' : 's'}</span>`;
+      card.querySelector('.hc-icon').style.background = colorTint(p.color, 0.16);
+      card.querySelector('.hc-icon').style.color = p.color;
+      card.querySelector('.hc-name').textContent = p.name;
+      card.addEventListener('click', () => { projectsOpen.clear(); projectsOpen.add(p.id); hideHome(); sideMode = 'files'; sidebarCollapsed = false; renderProjects(); updateSidebar(); });
+      pc.appendChild(card);
+    }
+  }
+  // recents
+  const rl = $('home-recents'); rl.innerHTML = '';
+  if (!recents.length) { rl.innerHTML = '<div class="home-empty">No recent documents yet.</div>'; }
+  else recents.slice(0, 8).forEach(r => {
+    const proj = projectOf(r.path);
+    const badge = badgeFor(kindOf(r.name));
+    const row = document.createElement('button');
+    row.className = 'home-recent';
+    row.innerHTML = `<span class="hr-badge" style="background:${badge.color}">${badge.label}</span><span class="hr-name"></span>${proj ? `<span class="hr-proj"><span class="hr-dot" style="background:${proj.color}"></span>${escapeHtmlText(proj.name)}</span>` : ''}<span class="hr-time">${timeAgo(r.ts)}</span>`;
+    row.querySelector('.hr-name').textContent = r.name;
+    row.addEventListener('click', () => { hideHome(); if (TAURI) openTauriPath(r.path); });
+    rl.appendChild(row);
+  });
+}
+
+function wireHome() {
+  const nav = $('nav-rail');
+  nav.hidden = false;
+  nav.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-nav], .nr-mark'); if (!btn) return;
+    const nav2 = btn.dataset.nav || 'home';
+    if (nav2 === 'home') showHome();
+    else if (nav2 === 'files') { hideHome(); sideMode = 'files'; sidebarCollapsed = false; updateSidebar(); }
+    else if (nav2 === 'projects') { hideHome(); sideMode = 'files'; sidebarCollapsed = false; renderProjects(); updateSidebar(); }
+    else if (nav2 === 'graph') { hideHome(); if (typeof toggleGraph === 'function') toggleGraph(); }
+    else if (nav2 === 'history') { hideHome(); $('history-panel').hidden = false; }
+    else if (nav2 === 'settings') { hideHome(); $('settings-overlay').hidden = false; }
+  });
+  $('home-new').addEventListener('click', () => { hideHome(); openViaPicker(); });
+  $('home-new-proj').addEventListener('click', () => openProjectModal((id) => { projectsOpen.add(id); renderHome(); }));
+  $('home-open').addEventListener('click', () => { hideHome(); openViaPicker(); });
+  $('home-open-folder').addEventListener('click', () => { hideHome(); if (typeof openFolder === 'function') openFolder(); });
+  $('home-ai').addEventListener('click', () => { hideHome(); toggleAiPanel(true); });
 }
 
 /* ---- Projects sidebar group ---- */
@@ -791,6 +878,7 @@ function modesFor(t) {
 /* ---------- Rendering ---------- */
 
 function renderActive() {
+  homeShown = false;
   const t = activeTab();
   // clear the interactive-HTML pane flags unless we're about to render live
   // HTML — otherwise a stuck .html-live disables #scroller overflow (no scroll)
@@ -3840,6 +3928,7 @@ async function boot() {
   wireMobile();
   wireTauri();
   wireProjectModal();
+  if (!mobileMQ.matches) wireHome();
   renderProjects();
   renderRecents();
   renderActive();
@@ -3862,6 +3951,8 @@ async function boot() {
       }
     }
     if (pending) await openTauriPath(pending);
+    // open to Home when nothing else is showing (desktop entry point)
+    if (!tabs.length && !mobileMQ.matches) showHome();
     // first-run shortcuts sheet is desktop-only (⌘ keys don't exist on touch)
     if (!localStorage.getItem('mv_seen')) {
       localStorage.setItem('mv_seen', '1');
