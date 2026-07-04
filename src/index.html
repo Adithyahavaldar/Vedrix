@@ -11,8 +11,8 @@
 <link rel="stylesheet" href="vendor/fonts/fonts.css">
 <link rel="stylesheet" href="vendor/katex.min.css">
 <link rel="stylesheet" href="vendor/codemirror.css">
-<link rel="stylesheet" href="app.css?v=121">
-<link rel="stylesheet" href="themes.css?v=121">
+<link rel="stylesheet" href="app.css?v=122">
+<link rel="stylesheet" href="themes.css?v=122">
 </head>
 <body>
   <div id="topbar" data-tauri-drag-region>
@@ -130,6 +130,49 @@
   </div>
 
   <div id="assign-menu" hidden></div>
+
+  <div id="present-overlay" hidden>
+    <div id="present-stage"></div>
+    <div id="present-bar">
+      <button id="present-prev" title="Previous (←)">‹</button>
+      <span id="present-dots"></span>
+      <button id="present-next" title="Next (→)">›</button>
+      <span id="present-count"></span>
+      <span class="present-spacer"></span>
+      <span id="present-next-thumb"></span>
+      <button id="present-exit" title="Exit (Esc)">Exit</button>
+    </div>
+  </div>
+
+  <div id="export-overlay" hidden>
+    <div id="export-card">
+      <div id="export-head"><h2>Export document</h2><button id="export-close" class="icon-btn">✕</button></div>
+      <div id="export-body">
+        <div id="export-formats"></div>
+        <div id="export-options">
+          <div class="exp-opt-group" id="exp-theme-group">
+            <label>Theme</label>
+            <span class="seg" id="exp-theme"><button data-v="current" class="sel">Current</button><button data-v="light">Light</button><button data-v="dark">Dark</button></span>
+          </div>
+          <div class="exp-opt-group" id="exp-page-group">
+            <label>Page size</label>
+            <span class="seg" id="exp-page"><button data-v="a4" class="sel">A4</button><button data-v="letter">Letter</button></span>
+          </div>
+          <label class="exp-check"><input type="checkbox" id="exp-toc" checked> Include table of contents</label>
+          <label class="exp-check"><input type="checkbox" id="exp-nums"> Page numbers</label>
+          <div class="exp-note" id="exp-note"></div>
+        </div>
+        <div id="export-preview"><div id="export-preview-inner"></div></div>
+      </div>
+      <div id="export-foot">
+        <span id="export-dest"></span>
+        <div class="proj-actions">
+          <button id="export-cancel" class="btn-ghost">Cancel</button>
+          <button id="export-go" class="btn-accent">Export</button>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <div id="cmd-overlay" hidden>
     <div id="cmd-palette">

@@ -885,7 +885,7 @@ function renderActive() {
   if (!(t && t.kind === 'html')) contentEl.classList.remove('html-host', 'html-live');
   updateContextBar(t);
   const rb = $('reader-btn');
-  rb.hidden = !(t && (t.kind === 'pdf' || t.kind === 'html'));
+  rb.hidden = !(t && (t.kind === 'pdf' || t.kind === 'html' || t.kind === 'pptx'));
   if (t && t.kind === 'html') {
     const live = effectiveHtmlMode(t) === 'live';
     rb.textContent = live ? 'Aa' : '⚡';
@@ -894,6 +894,9 @@ function renderActive() {
   } else if (t && t.kind === 'pdf') {
     rb.textContent = 'Aa';
     rb.title = 'Reading mode — convert this PDF to Markdown';
+  } else if (t && t.kind === 'pptx') {
+    rb.innerHTML = '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M12 16v4M8 20h8"/></svg>';
+    rb.title = 'Present (full-screen slideshow)';
   }
   $('edit-btn').hidden = !isEditable(t);
   $('map-btn').hidden = !(t && t.kind !== 'unsupported');
@@ -2198,10 +2201,11 @@ function cmdActions() {
   if (t && (t.kind === 'md' || t.kind === 'text')) list.push({ id: 'edit', label: t.editing ? 'Stop editing' : 'Edit document', hint: '⌘E', icon: 'pencil', run: () => { closeCmd(); toggleEdit(); } });
   if (t && t.kind === 'html') list.push({ id: 'mode', label: 'Toggle Reader / Live', hint: '', icon: 'swap', run: () => { closeCmd(); toggleHtmlMode(); } });
   if (t && t.kind === 'pdf') list.push({ id: 'reader', label: 'Reading mode (PDF → Markdown)', hint: '', icon: 'swap', run: () => { closeCmd(); openReadingMode(); } });
+  if (t && t.kind === 'pptx') list.push({ id: 'present', label: 'Present (full-screen slideshow)', hint: '', icon: 'present', run: () => { closeCmd(); startPresentation(); } });
   if (t && t.kind !== 'unsupported') list.push({ id: 'map', label: 'Open mind map', hint: '⌘M', icon: 'map', run: () => { closeCmd(); toggleMap(); } });
   list.push({ id: 'ai', label: 'Open AI assistant', hint: '⌘J', icon: 'ai', filled: true, run: () => { closeCmd(); if ($('ai-panel').hidden) toggleAiPanel(); } });
   if (t) list.push({ id: 'summarize', label: 'Summarize this document', hint: 'AI', icon: 'ai', filled: true, run: () => { closeCmd(); toggleAiPanel(true); if (typeof aiQuick === 'function') aiQuick('summarize'); } });
-  if (t) list.push({ id: 'export', label: 'Export…', hint: '', icon: 'export', run: () => { closeCmd(); exportActive('md'); } });
+  if (t) list.push({ id: 'export', label: 'Export…', hint: '', icon: 'export', run: () => { closeCmd(); openExportDialog(); } });
   list.push({ id: 'open-folder', label: 'Open a folder (wiki mode)', hint: '⌘⇧O', icon: 'doc', run: () => { closeCmd(); if (typeof openFolder === 'function') openFolder(); } });
   list.push({ id: 'new-project', label: 'New project…', hint: '', icon: 'layers', run: () => { closeCmd(); openProjectModal((id) => { const t = activeTab(); if (t && t.path) assignToProject(t.path, id); sideMode = 'files'; updateSidebar(); }); } });
   if (t && t.path) list.push({ id: 'add-to-project', label: 'Add this document to a project…', hint: '', icon: 'layers', run: () => { closeCmd(); openTabAssignMenuCentered(t); } });
@@ -2912,9 +2916,138 @@ body{margin:0;background:${dark ? '#0d1117' : '#ffffff'};}
 </head><body><article class="markdown-body">${body}</article></body></html>`;
 }
 
+/* ---------- PPTX presentation mode ---------- */
+
+const presentState = { active: false, idx: 0, slides: [] };
+
+function startPresentation() {
+  const t = activeTab();
+  if (!t || t.kind !== 'pptx' || !t.pagesEl) return;
+  presentState.slides = [...t.pagesEl.querySelectorAll('.doc-page')];
+  if (!presentState.slides.length) return;
+  presentState.active = true;
+  presentState.idx = currentPage(t) - 1 || 0;
+  $('present-overlay').hidden = false;
+  renderPresent();
+  try { $('present-overlay').requestFullscreen && $('present-overlay').requestFullscreen(); } catch (_) {}
+}
+
+function renderPresent() {
+  const stage = $('present-stage');
+  stage.innerHTML = '';
+  const slide = presentState.slides[presentState.idx];
+  if (slide) { const c = slide.cloneNode(true); c.classList.add('present-slide'); stage.appendChild(c); }
+  const n = presentState.slides.length;
+  $('present-count').textContent = `${presentState.idx + 1} / ${n}`;
+  // dots
+  const dots = $('present-dots'); dots.innerHTML = '';
+  for (let i = 0; i < n; i++) { const d = document.createElement('span'); d.className = 'p-dot' + (i === presentState.idx ? ' on' : ''); d.addEventListener('click', () => { presentState.idx = i; renderPresent(); }); dots.appendChild(d); }
+  // next thumb
+  const nt = $('present-next-thumb'); nt.innerHTML = '';
+  if (presentState.idx + 1 < n) { const c = presentState.slides[presentState.idx + 1].cloneNode(true); c.classList.add('present-thumb'); nt.appendChild(c); }
+}
+
+function presentNav(d) {
+  presentState.idx = Math.max(0, Math.min(presentState.slides.length - 1, presentState.idx + d));
+  renderPresent();
+}
+
+function exitPresentation() {
+  presentState.active = false;
+  $('present-overlay').hidden = true;
+  try { document.fullscreenElement && document.exitFullscreen(); } catch (_) {}
+}
+
+function wirePresent() {
+  $('present-prev').addEventListener('click', () => presentNav(-1));
+  $('present-next').addEventListener('click', () => presentNav(1));
+  $('present-exit').addEventListener('click', exitPresentation);
+  document.addEventListener('keydown', (e) => {
+    if (!presentState.active) return;
+    if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') { e.preventDefault(); presentNav(1); }
+    else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); presentNav(-1); }
+    else if (e.key === 'Escape') { e.preventDefault(); exitPresentation(); }
+  });
+}
+
+/* ---------- Toast ---------- */
+let toastTimer = null;
+function toast(msg) {
+  let el = $('mv-toast');
+  if (!el) { el = document.createElement('div'); el.id = 'mv-toast'; document.body.appendChild(el); }
+  el.textContent = msg; el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 1900);
+}
+
+/* ---------- Export dialog (format list · options · live preview) ---------- */
+
+const EXPORT_FORMATS = [
+  { id: 'pdf', label: 'PDF', desc: 'Print-ready, themed', icon: 'doc' },
+  { id: 'html', label: 'HTML', desc: 'Self-contained page', icon: 'doc' },
+  { id: 'md', label: 'Markdown', desc: 'Portable .md', icon: 'doc' },
+  { id: 'docx', label: 'Word', desc: 'Best-effort .docx', icon: 'doc', pandoc: true },
+  { id: 'png', label: 'Image', desc: 'PNG of the page', icon: 'doc', soon: true },
+  { id: 'epub', label: 'EPUB', desc: 'E-reader book', icon: 'book', pandoc: true, soon: true },
+];
+const exportState = { fmt: 'pdf' };
+
+function openExportDialog() {
+  const t = activeTab();
+  if (!t) return;
+  exportState.fmt = (t.kind === 'sheet') ? 'md' : 'pdf';
+  // format list
+  const fl = $('export-formats'); fl.innerHTML = '';
+  for (const f of EXPORT_FORMATS) {
+    const b = document.createElement('button');
+    b.className = 'exp-fmt' + (f.id === exportState.fmt ? ' sel' : '') + (f.soon ? ' soon' : '');
+    b.dataset.fmt = f.id;
+    b.innerHTML = `<span class="exp-fmt-ic">${svgIcon(f.icon)}</span><span class="exp-fmt-txt"><b>${f.label}</b><em>${f.desc}</em></span>${f.pandoc ? '<span class="exp-tag">pandoc</span>' : ''}${f.soon ? '<span class="exp-tag soon">soon</span>' : ''}`;
+    b.addEventListener('click', () => { if (f.soon) return; exportState.fmt = f.id; syncExportDialog(); });
+    fl.appendChild(b);
+  }
+  $('export-overlay').hidden = false;
+  syncExportDialog();
+}
+
+function syncExportDialog() {
+  const t = activeTab();
+  $('export-formats').querySelectorAll('.exp-fmt').forEach(b => b.classList.toggle('sel', b.dataset.fmt === exportState.fmt));
+  const isPdf = exportState.fmt === 'pdf';
+  const isHtmlish = exportState.fmt === 'pdf' || exportState.fmt === 'html';
+  $('exp-theme-group').style.display = isHtmlish ? '' : 'none';
+  $('exp-page-group').style.display = isPdf ? '' : 'none';
+  $('export-preview').style.display = isHtmlish ? '' : 'none';
+  const f = EXPORT_FORMATS.find(x => x.id === exportState.fmt);
+  $('exp-note').textContent = f.pandoc ? 'Needs the optional pandoc helper for full fidelity.' : '';
+  $('export-dest').textContent = `${stem(t.name)}.${exportState.fmt === 'md' ? 'md' : exportState.fmt}`;
+  // live preview (mini render of the doc)
+  if (isHtmlish) {
+    const inner = $('export-preview-inner');
+    inner.className = 'markdown-body';
+    inner.innerHTML = (t.html || contentEl.innerHTML || '').slice(0, 4000);
+  }
+}
+
+function wireExportDialog() {
+  $('export-close').addEventListener('click', () => { $('export-overlay').hidden = true; });
+  $('export-cancel').addEventListener('click', () => { $('export-overlay').hidden = true; });
+  $('export-overlay').addEventListener('mousedown', (e) => { if (e.target === $('export-overlay')) $('export-overlay').hidden = true; });
+  document.querySelectorAll('#exp-theme button, #exp-page button').forEach(b => b.addEventListener('click', () => {
+    b.parentElement.querySelectorAll('button').forEach(x => x.classList.remove('sel')); b.classList.add('sel');
+  }));
+  $('export-go').addEventListener('click', () => {
+    const fmt = exportState.fmt;
+    $('export-overlay').hidden = true;
+    if (fmt === 'pdf') window.print();
+    else exportActive(fmt);
+  });
+}
+
 async function exportActive(fmt) {
   const t = activeTab();
   if (!t) return;
+  if (fmt === 'docx' || fmt === 'epub' || fmt === 'png') { toast('“' + fmt.toUpperCase() + '” export needs the pandoc helper (coming soon)'); return; }
   if (fmt === 'md') {
     const text = TEXT_KINDS.includes(t.kind) ? (t.text || '')
       : t.mdText ? t.mdText
@@ -2933,6 +3066,7 @@ async function exportActive(fmt) {
     const csv = XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]);
     await saveTextAs(csv, stem(t.name) + '.csv');
   }
+  toast('Exported ' + stem(t.name) + '.' + fmt);
 }
 
 /* ---------- PDF → Markdown reading mode ---------- */
@@ -3674,7 +3808,7 @@ const OVERFLOW_ACTIONS = {
   map: toggleMap,
   reader: () => {
     const t = activeTab();
-    if (t && t.kind === 'html') toggleHtmlMode(); else openReadingMode();
+    if (t && t.kind === 'html') toggleHtmlMode(); else if (t && t.kind === 'pptx') startPresentation(); else openReadingMode();
   },
   edit: toggleEdit,
   find: openFind,
@@ -3743,7 +3877,7 @@ function wireGlobal() {
   $('edit-btn').addEventListener('click', toggleEdit);
   $('reader-btn').addEventListener('click', () => {
     const t = activeTab();
-    if (t && t.kind === 'html') toggleHtmlMode(); else openReadingMode();
+    if (t && t.kind === 'html') toggleHtmlMode(); else if (t && t.kind === 'pptx') startPresentation(); else openReadingMode();
   });
   $('pill-rich').addEventListener('click', () => setEditSurface('rich'));
   $('pill-source').addEventListener('click', () => setEditSurface('source'));
@@ -3794,6 +3928,7 @@ function wireGlobal() {
       $('cmd-overlay').hidden = true;
       $('project-overlay').hidden = true;
       $('assign-menu').hidden = true;
+      $('export-overlay').hidden = true;
       if (!$('findbar').hidden) closeFind();
     }
     else if (mod && e.altKey && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {
@@ -3928,6 +4063,8 @@ async function boot() {
   wireMobile();
   wireTauri();
   wireProjectModal();
+  wireExportDialog();
+  wirePresent();
   if (!mobileMQ.matches) wireHome();
   renderProjects();
   renderRecents();

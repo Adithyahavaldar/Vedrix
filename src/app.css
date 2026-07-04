@@ -1009,6 +1009,74 @@ body.editing #scroller { flex: 1; }
 .btn-accent { font: inherit; font-size: 13px; font-weight: 600; padding: 9px 18px; border: none; border-radius: 9px; background: var(--accent); color: var(--accent-fg); cursor: pointer; }
 .btn-accent:hover { filter: brightness(1.06); }
 
+/* ---- PPTX presentation mode ---- */
+#present-overlay {
+  position: fixed; inset: 0; z-index: 260;
+  display: flex; flex-direction: column;
+  background: #0d0c10;
+}
+#present-overlay[hidden] { display: none; }
+#present-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 3vh 3vw; }
+.present-slide { max-width: 92vw; max-height: 84vh; box-shadow: 0 30px 80px -30px rgba(0,0,0,.8); border-radius: 4px; background: #fff; }
+#present-bar {
+  height: 56px; flex: 0 0 auto;
+  display: flex; align-items: center; gap: 12px; padding: 0 18px;
+  background: #16151a; color: #d8d5cf; border-top: 1px solid #2a282f;
+}
+#present-bar button { border: none; background: transparent; color: #d8d5cf; font: inherit; cursor: pointer; }
+#present-prev, #present-next { font-size: 22px; width: 34px; height: 34px; border-radius: 8px; }
+#present-prev:hover, #present-next:hover { background: #2a282f; }
+#present-count { font: 500 12px 'Geist Mono', monospace; color: #9a968e; }
+#present-dots { display: flex; gap: 5px; align-items: center; }
+.p-dot { width: 7px; height: 7px; border-radius: 50%; background: #46434c; cursor: pointer; }
+.p-dot.on { background: var(--accent); }
+.present-spacer { flex: 1; }
+#present-next-thumb { display: flex; align-items: center; }
+.present-thumb { width: 96px; height: 54px; object-fit: contain; border-radius: 3px; overflow: hidden; background: #fff; transform-origin: center; box-shadow: 0 2px 8px rgba(0,0,0,.4); }
+#present-exit { font-size: 12.5px; padding: 7px 14px; border-radius: 8px; background: #2a282f; }
+#present-exit:hover { background: #3a373f; }
+
+/* ---- Toast ---- */
+#mv-toast {
+  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%) translateY(12px);
+  background: var(--fg); color: var(--bg);
+  font-size: 13px; font-weight: 500; padding: 10px 18px; border-radius: 10px;
+  box-shadow: 0 14px 34px -12px rgba(0,0,0,.5);
+  opacity: 0; pointer-events: none; transition: opacity .18s, transform .18s; z-index: 300;
+}
+#mv-toast.show { opacity: 1; transform: translateX(-50%); }
+
+/* ---- Export dialog ---- */
+#export-overlay { position: fixed; inset: 0; z-index: 245; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.4); }
+#export-overlay[hidden] { display: none; }
+#export-card { width: min(760px, 94vw); height: min(560px, 90vh); display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--border); border-radius: 18px; box-shadow: 0 40px 90px -30px rgba(0,0,0,.6); overflow: hidden; animation: sutra-in .14s ease-out; }
+#export-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px; border-bottom: 1px solid var(--border); }
+#export-head h2 { margin: 0; font: 600 18px 'Newsreader', serif; }
+#export-body { flex: 1; display: grid; grid-template-columns: 200px 220px 1fr; min-height: 0; }
+#export-formats { border-right: 1px solid var(--border); padding: 10px; overflow-y: auto; }
+.exp-fmt { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; border: none; background: transparent; color: var(--fg); font: inherit; padding: 9px 10px; border-radius: 9px; cursor: pointer; margin-bottom: 2px; }
+.exp-fmt:hover { background: var(--hover); }
+.exp-fmt.sel { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.exp-fmt.soon { opacity: .5; cursor: default; }
+.exp-fmt-ic { width: 30px; height: 30px; border-radius: 8px; background: var(--bg); display: flex; align-items: center; justify-content: center; flex: 0 0 auto; }
+.exp-fmt-ic svg { width: 16px; height: 16px; fill: none; stroke: var(--accent); stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.exp-fmt-txt { flex: 1; display: flex; flex-direction: column; }
+.exp-fmt-txt b { font-size: 13.5px; font-weight: 600; }
+.exp-fmt-txt em { font-size: 11px; font-style: normal; color: var(--text-muted); }
+.exp-tag { font: 600 9px 'Geist Mono', monospace; text-transform: uppercase; color: var(--text-muted); background: var(--hover); padding: 2px 6px; border-radius: 5px; }
+.exp-tag.soon { color: var(--accent); }
+#export-options { padding: 16px; border-right: 1px solid var(--border); overflow-y: auto; }
+.exp-opt-group { margin-bottom: 16px; }
+.exp-opt-group label { display: block; font-size: 11.5px; font-weight: 600; color: var(--text-muted); margin-bottom: 6px; }
+.exp-check { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 10px; cursor: pointer; }
+.exp-check input { width: 15px; height: 15px; accent-color: var(--accent); }
+.exp-note { font-size: 11px; color: var(--text-muted); margin-top: 8px; line-height: 1.4; }
+#export-preview { padding: 20px; overflow: hidden; background: var(--panel2); display: flex; justify-content: center; }
+#export-preview-inner { background: var(--card); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 8px 24px -12px rgba(0,0,0,.4); width: 100%; max-width: 320px; padding: 20px; font-size: 8px; line-height: 1.5; overflow: hidden; transform-origin: top center; pointer-events: none; }
+#export-preview-inner h1 { font-size: 15px; } #export-preview-inner h2 { font-size: 11px; } #export-preview-inner h3 { font-size: 9px; }
+#export-foot { display: flex; align-items: center; justify-content: space-between; padding: 12px 18px; border-top: 1px solid var(--border); }
+#export-dest { font: 500 11.5px 'Geist Mono', monospace; color: var(--text-muted); }
+
 /* ---- Command palette (⌘K) ---- */
 #cmd-overlay {
   position: fixed; inset: 0; z-index: 240;
