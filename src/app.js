@@ -101,10 +101,14 @@ sysDark.addEventListener('change', applySettings);
 /* ---------- Recents / history ---------- */
 
 let recents = [];
-try { recents = JSON.parse(localStorage.getItem('mv_recents') || '[]'); } catch (_) {}
+try {
+  recents = JSON.parse(localStorage.getItem('mv_recents') || '[]')
+    .filter(r => r.path && !r.path.startsWith('content://')); // purge stale Android URIs
+} catch (_) {}
 
 function recordRecent(name, path) {
   if (!path) return; // browser-mode files can't be reopened later
+  if (path.startsWith('content://')) return; // Android URIs aren't reopenable after restart
   const prev = recents.find(r => r.path === path);
   recents = recents.filter(r => r.path !== path);
   recents.unshift({ name, path, ts: Date.now(), pos: prev ? prev.pos : 0 });
@@ -985,12 +989,60 @@ async function makeTab(base, kind, { text, bytes }) {
   return tab;
 }
 
+/* Android's document picker returns an opaque content:// URI — no filename,
+   no extension. Read the bytes through the fs plugin (which resolves Android
+   content URIs), detect the format from magic bytes, and derive a readable
+   name from the content itself. */
+async function readContentUri(uri) {
+  const raw = await TAURI.core.invoke('plugin:fs|read_file', { path: uri });
+  const bytes = raw instanceof Uint8Array ? raw
+    : raw instanceof ArrayBuffer ? new Uint8Array(raw)
+    : new Uint8Array(raw);
+  const kind = await sniffKind(bytes);
+  const text = TEXT_KINDS.includes(kind) ? new TextDecoder('utf-8').decode(bytes) : null;
+  return { kind, bytes, text, name: deriveName(kind, text) };
+}
+
+async function sniffKind(b) {
+  if (b.length >= 4 && b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46) return 'pdf'; // %PDF
+  if (b.length >= 2 && b[0] === 0x50 && b[1] === 0x4B) {   // PK — OOXML zip
+    try {
+      const names = Object.keys((await JSZip.loadAsync(b.slice(0))).files);
+      if (names.some(n => n.startsWith('word/'))) return 'docx';
+      if (names.some(n => n.startsWith('ppt/'))) return 'pptx';
+      if (names.some(n => n.startsWith('xl/'))) return 'sheet';
+    } catch (_) {}
+    return 'unsupported';
+  }
+  return 'md'; // default: render text as markdown
+}
+
+function deriveName(kind, text) {
+  if (TEXT_KINDS.includes(kind) && text) {
+    const m = text.match(/^\s*#{1,6}\s+(.+)$/m) || text.match(/^\s*(\S.+)$/m);
+    if (m) return m[1].trim().replace(/[#*`_]/g, '').slice(0, 60) + '.md';
+  }
+  return { pdf: 'Document.pdf', docx: 'Document.docx', pptx: 'Presentation.pptx', sheet: 'Spreadsheet.xlsx' }[kind] || 'Document';
+}
+
+const _opening = new Set(); // guard against double-fire (touch + click, dialog double-resolve)
+
 async function openTauriPath(path) {
   const existing = tabs.find(t => t.path === path);
   if (existing) { switchTab(existing.id); return; }
-  const name = path.split('/').pop();
-  const kind = kindOf(name);
+  if (_opening.has(path)) return;
+  _opening.add(path);
   try {
+    // Android content/file URIs: read via fs plugin + content sniffing
+    if (path.startsWith('content://') || path.startsWith('file://')) {
+      const { kind, bytes, text, name } = await readContentUri(path);
+      const tab = await makeTab({ name, path, mtime: 0 }, kind, { text, bytes });
+      tab.live = false; // content URIs aren't watchable for live-reload
+      addTab(tab);
+      return;
+    }
+    const name = path.split('/').pop();
+    const kind = kindOf(name);
     const loaded = kind === 'unsupported' ? { mtime: 0 } : await loadTauriContent(kind, path);
     const tab = await makeTab({ name, path, mtime: loaded.mtime }, kind, loaded);
     addTab(tab);
@@ -998,6 +1050,9 @@ async function openTauriPath(path) {
     if (pos) { tab.scrollTop = pos; scrollerEl.scrollTop = pos; }
   } catch (err) {
     console.error('Failed to open', path, err);
+    diag('openTauriPath error: ' + (err && err.message || err));
+  } finally {
+    _opening.delete(path);
   }
 }
 
@@ -1023,6 +1078,7 @@ async function openViaPicker() {
         directory: false,
       },
     });
+    diag('picker returned: ' + JSON.stringify(picked));
     if (picked) openTauriPath(typeof picked === 'string' ? picked : picked.path);
     return;
   }

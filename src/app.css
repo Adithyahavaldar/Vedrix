@@ -1,6 +1,10 @@
 /* ---- App chrome (theme vars come from themes.css) ---- */
 * { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; height: 100%; }
+/* app shell: the page itself must never scroll — all scrolling happens in
+   #scroller/#toc. Without this, absolutely-positioned descendants that escape
+   their scroll container (e.g. KaTeX's hidden MathML) grow the body and show
+   a permanent second scrollbar. */
+html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
 body {
   display: flex; flex-direction: column;
   background: var(--bg);
@@ -200,7 +204,9 @@ body.mac #topbar { padding-left: 84px; } /* room for macOS traffic lights (overl
   padding: 0 8px 8px;
 }
 
-#scroller { flex: 1; overflow-y: auto; background: var(--bg); }
+/* position:relative makes #scroller the containing block for absolutely-
+   positioned content (KaTeX MathML, mermaid internals) so overflow clips it */
+#scroller { flex: 1; overflow-y: auto; background: var(--bg); position: relative; }
 #scroller[hidden] { display: none; }
 .markdown-body {
   max-width: var(--reader-width, 820px);
@@ -723,8 +729,20 @@ body.mobile .hint-mobile { display: block; }
   .topbar-full { display: none !important; }   /* fold into ⋯ overflow */
   .mobile-only { display: inline-flex; }
 
-  #topbar { height: 48px; gap: 2px; padding: 0 4px; }
+  /* safe areas: the webview is edge-to-edge, so push chrome clear of the
+     status bar (top) / gesture bar (bottom) / notch (sides). max() gives a
+     sane floor when the platform reports 0 insets. */
+  #topbar {
+    height: calc(48px + env(safe-area-inset-top, 0px));
+    gap: 2px;
+    padding: max(env(safe-area-inset-top, 0px), 24px) 4px 0;
+  }
   body.mac #topbar { padding-left: 4px; }      /* mobile has no traffic lights */
+  #overflow-menu { top: calc(46px + env(safe-area-inset-top, 0px)); }
+  #sidebar, #ai-panel, #mapview, #graphview { padding-top: env(safe-area-inset-top, 0px); }
+  #scroller { padding-bottom: env(safe-area-inset-bottom, 0px); }
+  #ai-input-row { padding-bottom: max(env(safe-area-inset-bottom, 0px), 8px); }
+  #zoom-pill { bottom: calc(20px + env(safe-area-inset-bottom, 0px)); }
   .icon-btn { min-width: 40px; height: 40px; font-size: 17px; }
   /* keep only the essentials in the bar; everything else → ⋯ overflow */
   #open-btn, #live-badge, #map-btn, #reader-btn, #edit-btn, #history-btn,

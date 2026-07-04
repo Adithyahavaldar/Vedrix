@@ -60,6 +60,7 @@ fn read_file_bytes(path: String) -> Result<tauri::ipc::Response, String> {
 #[tauri::command]
 fn diag(msg: String) {
     use std::io::Write;
+    println!("MVDIAG {}", msg); // routed to logcat on Android
     let path = std::env::temp_dir().join("mv-diag.log");
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(f, "{}", msg);
@@ -183,6 +184,7 @@ fn open_externally(path: String) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .manage(PendingFile(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             read_md_file,
