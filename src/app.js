@@ -202,15 +202,32 @@ const PAGED_KINDS = ['pdf', 'pptx'];
 
 function activeTab() { return tabs.find(t => t.id === activeId) || null; }
 
+// format → { label, color } for tab/tree/list badges (design spec)
+const FORMAT_BADGE = {
+  md:   { label: 'MD',  color: '#b5623a' },
+  html: { label: 'HTML', color: '#5a86b0' },
+  pdf:  { label: 'PDF', color: '#c05a4a' },
+  docx: { label: 'DOC', color: '#2f6fb0' },
+  pptx: { label: 'PPT', color: '#c8912a' },
+  sheet:{ label: 'XLS', color: '#3f8f5a' },
+  text: { label: 'TXT', color: '#8a7f6d' },
+  unsupported: { label: '?', color: '#8a7f6d' },
+};
+function badgeFor(kind) { return FORMAT_BADGE[kind] || FORMAT_BADGE.text; }
+
 function renderTabStrip() {
   const strip = $('tabs');
   strip.innerHTML = '';
   for (const t of tabs) {
     const el = document.createElement('div');
-    el.className = 'tab' + (t.id === activeId ? ' active' : '') + (t.live && t.id === activeId ? ' live' : '');
+    const isLiveHtml = t.kind === 'html' && effectiveHtmlMode(t) === 'live';
+    el.className = 'tab' + (t.id === activeId ? ' active' : '') + (isLiveHtml ? ' live-html' : '');
     el.title = t.path || t.name;
     el.dataset.id = t.id;
-    el.innerHTML = `<span class="tab-dot"></span><span class="tab-name"></span><span class="tab-dirty" title="Unsaved changes"></span><button class="tab-close" title="Close (⌘W)">×</button>`;
+    const b = badgeFor(t.kind);
+    el.innerHTML = `<span class="tab-badge"></span><span class="tab-name"></span><span class="tab-live">LIVE</span><span class="tab-dirty" title="Unsaved changes"></span><button class="tab-close" title="Close (⌘W)">×</button>`;
+    const badgeEl = el.querySelector('.tab-badge');
+    badgeEl.textContent = b.label; badgeEl.style.background = b.color;
     if (t.dirty) el.classList.add('dirty');
     el.querySelector('.tab-name').textContent = t.name;
     el.addEventListener('mousedown', (e) => {
@@ -376,12 +393,37 @@ function clearToc() {
 }
 
 function tocSkeleton() {
-  const title = document.createElement('div');
-  title.className = 'toc-title';
-  title.textContent = 'Contents';
-  tocEl.appendChild(title);
+  const head = document.createElement('div');
+  head.className = 'toc-head';
+  head.innerHTML = `<span class="toc-title">Contents</span><span class="toc-pct" id="toc-pct">0%</span>`;
+  tocEl.appendChild(head);
+  const prog = document.createElement('div');
+  prog.className = 'toc-prog';
+  prog.innerHTML = `<div class="toc-prog-fill" id="toc-prog-fill"></div>`;
+  tocEl.appendChild(prog);
+  const list = document.createElement('div');
+  list.className = 'toc-list';
+  list.id = 'toc-list';
+  tocEl.appendChild(list);
+  // "Ask about this doc" card
+  const card = document.createElement('button');
+  card.className = 'toc-ask';
+  card.innerHTML = `<span class="toc-ask-head"><span class="toc-ask-icon"><svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor"><path d="M12 2l1.9 6.1L20 10l-6.1 1.9L12 18l-1.9-6.1L4 10l6.1-1.9z"/></svg></span>Ask about this doc</span><span class="toc-ask-sub">Summarize · find open questions · draft</span>`;
+  card.addEventListener('click', () => { if (typeof aiQuick === 'function') aiQuick('summarize'); else toggleAiPanel(); });
+  tocEl.appendChild(card);
   tocEl.classList.remove('hidden');
   updateSidebar();
+}
+
+// TOC entries append into #toc-list (not tocEl directly) so the card stays last
+function tocListEl() { return $('toc-list') || tocEl; }
+
+function updateReadingProgress() {
+  const fill = $('toc-prog-fill'); if (!fill) return;
+  const max = scrollerEl.scrollHeight - scrollerEl.clientHeight;
+  const pct = max > 0 ? Math.round(scrollerEl.scrollTop / max * 100) : 0;
+  fill.style.width = pct + '%';
+  const p = $('toc-pct'); if (p) p.textContent = pct + '%';
 }
 
 /* TOC from rendered headings (md / docx) */
@@ -399,7 +441,7 @@ function buildHeadingToc() {
       e.preventDefault();
       h.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
-    tocEl.appendChild(a);
+    tocListEl().appendChild(a);
   }
   tocObserver = new IntersectionObserver((entries) => {
     for (const entry of entries) {
@@ -430,7 +472,7 @@ function buildPagedToc(t) {
       const el = t.pagesEl && t.pagesEl.querySelector(`.doc-page[data-page="${it.page}"]`);
       if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
-    tocEl.appendChild(a);
+    tocListEl().appendChild(a);
   });
   highlightPagedToc(t);
 }
@@ -469,6 +511,67 @@ function highlightPagedToc(t) {
   tocEl.querySelectorAll('a').forEach(a => a.classList.toggle('active', +a.dataset.i === sel));
 }
 
+/* ---------- Context bar (path · mode · read-time · saved) ---------- */
+
+function readTime(t) {
+  const txt = t.text || (t.html ? t.html.replace(/<[^>]+>/g, ' ') : '');
+  const words = (txt.trim().match(/\S+/g) || []).length;
+  if (!words) return '';
+  return `${Math.max(1, Math.round(words / 220))} min read · ${words.toLocaleString()} words`;
+}
+
+function updateContextBar(t) {
+  const bar = $('context-bar');
+  if (!t || t.kind === 'unsupported') { bar.hidden = true; return; }
+  bar.hidden = false;
+  // path + filename
+  const pathEl = $('ctx-path');
+  if (t.path) {
+    const dir = t.path.slice(0, t.path.lastIndexOf('/') + 1).replace(/^\/Users\/[^/]+/, '~');
+    pathEl.innerHTML = '';
+    pathEl.append(document.createTextNode(dir), Object.assign(document.createElement('b'), { textContent: t.name }));
+  } else {
+    pathEl.innerHTML = ''; pathEl.append(Object.assign(document.createElement('b'), { textContent: t.name }));
+  }
+  // mode segmented control
+  const modes = modesFor(t);
+  const seg = $('ctx-modes');
+  seg.hidden = modes.length < 2;
+  seg.innerHTML = '';
+  for (const m of modes) {
+    const btn = document.createElement('button');
+    btn.textContent = m.label;
+    btn.className = m.active ? 'sel' : '';
+    btn.addEventListener('click', m.onClick);
+    seg.appendChild(btn);
+  }
+  // meta (read time) — text-ish docs only
+  const meta = (['md', 'text', 'docx'].includes(t.kind)) ? readTime(t) : '';
+  $('ctx-meta').textContent = meta;
+  $('ctx-meta-sep').hidden = !meta || modes.length < 2;
+  // saved state
+  $('ctx-saved').classList.toggle('dirty', !!t.dirty);
+  $('ctx-saved').firstChild && ($('ctx-saved').lastChild.textContent = t.dirty ? ' Unsaved' : ' Saved');
+}
+
+// which modes a tab exposes, for the context-bar segmented control
+function modesFor(t) {
+  if (t.kind === 'md' || t.kind === 'text') {
+    return [
+      { label: 'Read', active: !t.editing, onClick: () => { if (t.editing) toggleEdit(); } },
+      { label: 'Edit', active: !!t.editing, onClick: () => { if (!t.editing) toggleEdit(); } },
+    ];
+  }
+  if (t.kind === 'html') {
+    const live = effectiveHtmlMode(t) === 'live';
+    return [
+      { label: 'Reader', active: !live, onClick: () => { if (live) toggleHtmlMode(); } },
+      { label: 'Live', active: live, onClick: () => { if (!live) toggleHtmlMode(); } },
+    ];
+  }
+  return [];
+}
+
 /* ---------- Rendering ---------- */
 
 function renderActive() {
@@ -476,7 +579,7 @@ function renderActive() {
   // clear the interactive-HTML pane flags unless we're about to render live
   // HTML — otherwise a stuck .html-live disables #scroller overflow (no scroll)
   if (!(t && t.kind === 'html')) contentEl.classList.remove('html-host', 'html-live');
-  $('live-badge').classList.toggle('on', !!(t && t.live && !t.editing));
+  updateContextBar(t);
   const rb = $('reader-btn');
   rb.hidden = !(t && (t.kind === 'pdf' || t.kind === 'html'));
   if (t && t.kind === 'html') {
@@ -652,7 +755,7 @@ function buildIframeToc(t, frame) {
       const fr = frame.getBoundingClientRect(), sr = scrollerEl.getBoundingClientRect();
       scrollerEl.scrollTop += fr.top + h.getBoundingClientRect().top - sr.top - 12;
     });
-    tocEl.appendChild(a);
+    tocListEl().appendChild(a);
   }
   updateSidebar();
 }
@@ -2324,6 +2427,7 @@ function setDirty(t, dirty) {
   t.dirty = dirty;
   const el = $('tabs').querySelector(`.tab[data-id="${t.id}"]`);
   if (el) el.classList.toggle('dirty', dirty);
+  if (t.id === activeId) $('ctx-saved').classList.toggle('dirty', dirty);
 }
 
 function onEditorChange() {
@@ -3238,6 +3342,7 @@ window.addEventListener('message', (e) => {
 function wireGlobal() {
   $('open-btn').addEventListener('click', openViaPicker);
   $('new-tab').addEventListener('click', openViaPicker);
+  $('search-chip').addEventListener('click', openFind); // becomes ⌘K palette in D2
   $('toc-toggle').addEventListener('click', toggleSidebar);
   $('edit-btn').addEventListener('click', toggleEdit);
   $('reader-btn').addEventListener('click', () => {
@@ -3325,6 +3430,7 @@ function wireGlobal() {
       }
       if (el === scrollerEl) {
         rememberPosition();
+        updateReadingProgress();
         const t = activeTab();
         if (t && PAGED_KINDS.includes(t.kind)) { highlightPagedToc(t); renderVisiblePages(t); }
       }
