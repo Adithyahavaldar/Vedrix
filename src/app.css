@@ -671,6 +671,35 @@ body.editing #scroller { flex: 1; }
 }
 .tab.dirty .tab-dirty { display: block; }
 
+/* ---- HTML documents (sandboxed frame keeps the page's own styling) ---- */
+.markdown-body.html-host { max-width: none; padding: 0; }
+.html-frame { display: block; width: 100%; border: 0; background: #fff; min-height: 200px; }
+
+/* ---- Edit pill (Text / Source / Done) ---- */
+#edit-pill {
+  position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%);
+  display: flex;
+  background: var(--panel);
+  border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(0,0,0,.2);
+  overflow: hidden;
+  z-index: 65;
+}
+#edit-pill[hidden] { display: none; }
+#edit-pill button {
+  font: inherit; font-size: 12.5px;
+  padding: 7px 16px;
+  border: none; background: transparent; color: var(--fg);
+  cursor: pointer;
+}
+#edit-pill button + button { border-left: 1px solid var(--border); }
+#edit-pill button:hover { background: var(--hover); }
+#edit-pill button.sel { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); font-weight: 600; }
+
+/* rich editing: subtle affordance that the page is now editable */
+body.rich-editing #content { outline: none; caret-color: var(--accent); }
+body.rich-editing #scroller { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent); }
+
 /* mermaid diagrams */
 .markdown-body .mermaid { display: flex; justify-content: center; background: transparent; }
 .markdown-body .mermaid svg { max-width: 100%; }
@@ -743,6 +772,8 @@ body.mobile .hint-mobile { display: block; }
   #scroller { padding-bottom: env(safe-area-inset-bottom, 0px); }
   #ai-input-row { padding-bottom: max(env(safe-area-inset-bottom, 0px), 8px); }
   #zoom-pill { bottom: calc(20px + env(safe-area-inset-bottom, 0px)); }
+  #edit-pill { bottom: calc(18px + env(safe-area-inset-bottom, 0px)); }
+  #edit-pill button { padding: 11px 18px; font-size: 14px; }
   .icon-btn { min-width: 40px; height: 40px; font-size: 17px; }
   /* keep only the essentials in the bar; everything else → ⋯ overflow */
   #open-btn, #live-badge, #map-btn, #reader-btn, #edit-btn, #history-btn,

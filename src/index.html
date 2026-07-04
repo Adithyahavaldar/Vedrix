@@ -10,8 +10,8 @@
 <link rel="stylesheet" href="vendor/hljs-github-dark.css" id="css-hl-dark" disabled>
 <link rel="stylesheet" href="vendor/katex.min.css">
 <link rel="stylesheet" href="vendor/codemirror.css">
-<link rel="stylesheet" href="app.css?v=104">
-<link rel="stylesheet" href="themes.css?v=104">
+<link rel="stylesheet" href="app.css?v=107">
+<link rel="stylesheet" href="themes.css?v=107">
 </head>
 <body>
   <div id="topbar" data-tauri-drag-region>
@@ -119,6 +119,12 @@
       <button id="zoom-out-btn" title="Zoom out (⌘−)">−</button>
       <button id="zoom-label" title="Fit width (⌘0)">100%</button>
       <button id="zoom-in-btn" title="Zoom in (⌘=)">+</button>
+    </div>
+
+    <div id="edit-pill" hidden>
+      <button id="pill-rich" title="Edit the text directly, like a document">Text</button>
+      <button id="pill-source" title="Edit the raw markdown syntax">Source</button>
+      <button id="pill-done" title="Finish editing (⌘E)">Done</button>
     </div>
 
     <aside id="ai-panel" hidden>
@@ -246,7 +252,7 @@
   </div>
 
   <input type="file" id="file-input" multiple
-         accept=".md,.markdown,.mdown,.pdf,.docx,.pptx,.xlsx,.xls,.csv,.tsv,.txt,.log,.json" hidden>
+         accept=".md,.markdown,.mdown,.pdf,.docx,.pptx,.xlsx,.xls,.csv,.tsv,.txt,.log,.json,.html,.htm" hidden>
 
 <script src="vendor/markdown-it.min.js"></script>
 <script src="vendor/markdown-it-task-lists.min.js"></script>
@@ -270,6 +276,6 @@
   window.pdfjsLib = pdfjsLib;
   window.dispatchEvent(new Event('pdfjs-ready'));
 </script>
-<script src="app.js?v=104"></script>
+<script src="app.js?v=107"></script>
 </body>
 </html>

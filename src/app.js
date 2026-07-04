@@ -191,7 +191,8 @@ function kindOf(name) {
   if (ext === 'docx') return 'docx';
   if (ext === 'pptx') return 'pptx';
   if (['xlsx', 'xls', 'csv', 'tsv'].includes(ext)) return 'sheet';
-  if (['txt', 'log', 'json', 'js', 'ts', 'py', 'sh', 'yaml', 'yml', 'toml', 'xml', 'rs', 'css', 'html'].includes(ext)) return 'text';
+  if (['html', 'htm'].includes(ext)) return 'html';
+  if (['txt', 'log', 'json', 'js', 'ts', 'py', 'sh', 'yaml', 'yml', 'toml', 'xml', 'rs', 'css'].includes(ext)) return 'text';
   return 'unsupported';
 }
 
@@ -494,13 +495,23 @@ function renderActive() {
 
   if (t.kind === 'unsupported') {
     clearToc();
+    applyRichState(null);
     $('unsupported-name').textContent = t.name;
     $('open-external').hidden = !(TAURI && t.path);
     showPane('unsupported');
     return;
   }
 
+  if (t.kind === 'html') {
+    applyRichState(null);
+    renderHtmlDoc(t);
+    applyZoom(t);
+    showPane('content');
+    return;
+  }
+
   if (PAGED_KINDS.includes(t.kind)) {
+    applyRichState(null);
     pagesHostEl.innerHTML = '';
     showPane('pages');
     ensurePaged(t).then(() => {
@@ -518,6 +529,7 @@ function renderActive() {
   }
 
   // html kinds
+  contentEl.classList.remove('html-host');
   contentEl.innerHTML = t.html || '';
   fixupContent(t);
   renderEnhancements(t).then(() => { if (activeId === t.id && ['md', 'docx', 'sheet'].includes(t.kind)) buildHeadingToc(); });
@@ -525,7 +537,71 @@ function renderActive() {
   applyZoom(t);
   showPane('content');
   syncEditorPane(t);
+  applyRichState(t);
   scrollerEl.scrollTop = t.scrollTop || 0;
+}
+
+/* ---------- HTML documents (sandboxed frame — page keeps its own CSS) ---------- */
+
+function renderHtmlDoc(t) {
+  clearToc();
+  contentEl.classList.add('html-host');
+  contentEl.innerHTML = '';
+  const f = document.createElement('iframe');
+  f.className = 'html-frame';
+  // no allow-scripts: page JS never runs. allow-same-origin lets us read the
+  // doc for TOC/search and size the frame to its content.
+  f.setAttribute('sandbox', 'allow-same-origin');
+  let src = t.rawHtml || '';
+  if (TAURI && t.path && !t.path.startsWith('content://')) {
+    const dir = t.path.slice(0, t.path.lastIndexOf('/') + 1);
+    const base = `<base href="${TAURI.core.convertFileSrc(dir)}/">`;
+    src = /<head[^>]*>/i.test(src) ? src.replace(/<head[^>]*>/i, m => m + base) : base + src;
+  }
+  f.srcdoc = src;
+  f.addEventListener('load', () => {
+    const d = f.contentDocument;
+    if (!d) return;
+    const style = d.createElement('style');
+    style.textContent = '::highlight(mv-find){background:rgba(255,200,0,.4)} ::highlight(mv-find-cur){background:#f5c518;color:#1a1a1a}';
+    (d.head || d.documentElement).appendChild(style);
+    const resize = () => {
+      f.style.height = Math.max(
+        d.documentElement ? d.documentElement.scrollHeight : 0,
+        d.body ? d.body.scrollHeight : 0, 200) + 'px';
+    };
+    resize();
+    setTimeout(resize, 400);
+    setTimeout(resize, 1500); // late images
+    if (activeId === t.id) {
+      buildIframeToc(t, f);
+      scrollerEl.scrollTop = t.scrollTop || 0;
+    }
+  });
+  t._frame = f;
+  contentEl.appendChild(f);
+}
+
+function buildIframeToc(t, frame) {
+  clearToc();
+  const doc = frame.contentDocument;
+  if (!doc) return;
+  const headings = [...doc.querySelectorAll('h1, h2, h3')].filter(h => h.textContent.trim());
+  if (headings.length < 2) return;
+  tocSkeleton();
+  for (const h of headings) {
+    const a = document.createElement('a');
+    a.href = '#';
+    a.textContent = h.textContent.trim().slice(0, 90);
+    a.className = 'lvl-' + h.tagName[1];
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      const fr = frame.getBoundingClientRect(), sr = scrollerEl.getBoundingClientRect();
+      scrollerEl.scrollTop += fr.top + h.getBoundingClientRect().top - sr.top - 12;
+    });
+    tocEl.appendChild(a);
+  }
+  updateSidebar();
 }
 
 let mermaidSeq = 0;
@@ -555,6 +631,7 @@ async function renderEnhancements(t) {
         const div = document.createElement('div');
         div.className = 'mermaid';
         div.id = 'mmd-' + (++mermaidSeq);
+        div.dataset.src = code.textContent; // kept for edit round-trip / export
         div.textContent = code.textContent;
         code.parentElement.replaceWith(div);
       }
@@ -575,6 +652,7 @@ function fixupContent(t) {
     contentEl.querySelectorAll('img[src]').forEach(img => {
       const src = img.getAttribute('src');
       if (!/^(https?:|data:|file:|asset:|blob:)/i.test(src)) {
+        img.setAttribute('data-orig-src', src); // restored on edit round-trip
         img.src = TAURI.core.convertFileSrc(src.startsWith('/') ? src : dir + '/' + src);
       }
     });
@@ -969,7 +1047,7 @@ async function renderPptxSlide(zip, parse, path, cx, cy, naturalW, urls) {
 /* ---------- Opening files ---------- */
 
 async function loadTauriContent(kind, path) {
-  if (TEXT_KINDS.includes(kind)) {
+  if (TEXT_KINDS.includes(kind) || kind === 'html') {
     const f = await TAURI.core.invoke('read_md_file', { path });
     return { text: f.text, mtime: f.mtime };
   }
@@ -982,6 +1060,9 @@ async function makeTab(base, kind, { text, bytes }) {
   const tab = { ...base, kind, live: kind !== 'unsupported' };
   if (PAGED_KINDS.includes(kind)) {
     tab.bytes = bytes;
+  } else if (kind === 'html') {
+    tab.rawHtml = text;                       // rendered in a sandboxed frame
+    tab.html = DOMPurify.sanitize(text);      // for TOC / mind map / export
   } else if (kind !== 'unsupported') {
     tab.html = await buildHtml(kind, { text, bytes });
     if (TEXT_KINDS.includes(kind)) tab.text = text;
@@ -999,7 +1080,7 @@ async function readContentUri(uri) {
     : raw instanceof ArrayBuffer ? new Uint8Array(raw)
     : new Uint8Array(raw);
   const kind = await sniffKind(bytes);
-  const text = TEXT_KINDS.includes(kind) ? new TextDecoder('utf-8').decode(bytes) : null;
+  const text = (TEXT_KINDS.includes(kind) || kind === 'html') ? new TextDecoder('utf-8').decode(bytes) : null;
   return { kind, bytes, text, name: deriveName(kind, text) };
 }
 
@@ -1014,10 +1095,17 @@ async function sniffKind(b) {
     } catch (_) {}
     return 'unsupported';
   }
+  const head = new TextDecoder('utf-8').decode(b.slice(0, 512)).trimStart().toLowerCase();
+  if (head.startsWith('<!doctype html') || head.startsWith('<html')) return 'html';
   return 'md'; // default: render text as markdown
 }
 
 function deriveName(kind, text) {
+  if (kind === 'html' && text) {
+    const m = text.match(/<title[^>]*>([^<]+)<\/title>/i) || text.match(/<h1[^>]*>([^<]+)<\/h1>/i);
+    if (m) return m[1].trim().slice(0, 60) + '.html';
+    return 'Page.html';
+  }
   if (TEXT_KINDS.includes(kind) && text) {
     const m = text.match(/^\s*#{1,6}\s+(.+)$/m) || text.match(/^\s*(\S.+)$/m);
     if (m) return m[1].trim().replace(/[#*`_]/g, '').slice(0, 60) + '.md';
@@ -1058,7 +1146,7 @@ async function openTauriPath(path) {
 
 async function openBrowserFile(file, handle) {
   const kind = kindOf(file.name);
-  const loaded = TEXT_KINDS.includes(kind)
+  const loaded = (TEXT_KINDS.includes(kind) || kind === 'html')
     ? { text: await file.text() }
     : kind === 'unsupported' ? {} : { bytes: await file.arrayBuffer() };
   const tab = await makeTab({ name: file.name, handle, mtime: file.lastModified }, kind, loaded);
@@ -1071,7 +1159,7 @@ async function openViaPicker() {
     const picked = await TAURI.core.invoke('plugin:dialog|open', {
       options: {
         filters: [
-          { name: 'All supported', extensions: ['md', 'markdown', 'mdown', 'pdf', 'docx', 'pptx', 'xlsx', 'xls', 'csv', 'txt', 'log', 'json'] },
+          { name: 'All supported', extensions: ['md', 'markdown', 'mdown', 'pdf', 'docx', 'pptx', 'xlsx', 'xls', 'csv', 'txt', 'log', 'json', 'html', 'htm'] },
           { name: 'Markdown', extensions: ['md', 'markdown', 'mdown'] },
         ],
         multiple: false,
@@ -1142,12 +1230,19 @@ function closeFind() {
   findState.ranges = [];
   findState.pdfMatches = [];
   findState.current = -1;
+  findState.frame = null;
+}
+
+function findWindow() {
+  // html documents live in a sandboxed frame with their own highlight registry
+  return findState.frame && findState.frame.contentWindow ? findState.frame.contentWindow : window;
 }
 
 function clearFindHighlights() {
-  if (window.CSS && CSS.highlights) {
-    CSS.highlights.delete('mv-find');
-    CSS.highlights.delete('mv-find-cur');
+  const W = findWindow();
+  if (W.CSS && W.CSS.highlights) {
+    W.CSS.highlights.delete('mv-find');
+    W.CSS.highlights.delete('mv-find-cur');
   }
 }
 
@@ -1186,25 +1281,29 @@ async function runFind(q) {
     return;
   }
 
-  // DOM-based kinds (md/docx/sheet/text/pptx): real ranges + highlights
-  const root = PAGED_KINDS.includes(t.kind) ? t.pagesEl : contentEl;
+  // DOM-based kinds (md/docx/sheet/text/pptx/html): real ranges + highlights
+  findState.frame = (t.kind === 'html') ? t._frame : null;
+  const root = t.kind === 'html' ? (t._frame && t._frame.contentDocument && t._frame.contentDocument.body)
+    : PAGED_KINDS.includes(t.kind) ? t.pagesEl : contentEl;
   if (!root) { updateFindCount(); return; }
+  const rootDoc = root.ownerDocument;
   const lq = q.toLowerCase();
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const walker = rootDoc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   let node;
   while ((node = walker.nextNode())) {
     const text = node.data.toLowerCase();
     let i = 0;
     while ((i = text.indexOf(lq, i)) !== -1) {
-      const r = new Range();
+      const r = rootDoc.createRange();
       r.setStart(node, i);
       r.setEnd(node, i + q.length);
       findState.ranges.push(r);
       i += q.length;
     }
   }
-  if (window.CSS && CSS.highlights && findState.ranges.length) {
-    CSS.highlights.set('mv-find', new Highlight(...findState.ranges));
+  const W = findWindow();
+  if (W.CSS && W.CSS.highlights && findState.ranges.length) {
+    W.CSS.highlights.set('mv-find', new W.Highlight(...findState.ranges));
   }
   if (findState.ranges.length) gotoMatch(1); else updateFindCount();
 }
@@ -1215,10 +1314,12 @@ function gotoMatch(dir) {
   findState.current = ((findState.current + dir) % n + n) % n;
   if (findState.ranges.length) {
     const r = findState.ranges[findState.current];
-    if (window.CSS && CSS.highlights) CSS.highlights.set('mv-find-cur', new Highlight(r));
-    const rect = r.getBoundingClientRect();
+    const W = findWindow();
+    if (W.CSS && W.CSS.highlights) W.CSS.highlights.set('mv-find-cur', new W.Highlight(r));
+    let top = r.getBoundingClientRect().top;
+    if (findState.frame) top += findState.frame.getBoundingClientRect().top; // frame → app coords
     const srect = scrollerEl.getBoundingClientRect();
-    scrollerEl.scrollTop += rect.top - srect.top - srect.height * 0.35;
+    scrollerEl.scrollTop += top - srect.top - srect.height * 0.35;
   } else {
     const m = findState.pdfMatches[findState.current];
     const t = activeTab();
@@ -1281,15 +1382,97 @@ function isEditable(t) {
   return !!(t && TEXT_KINDS.includes(t.kind) && (t.path || (t.handle && t.handle.createWritable)));
 }
 
-function toggleEdit() {
+async function toggleEdit() {
   const t = activeTab();
   if (!isEditable(t)) return;
-  t.editing = !t.editing;
+  if (t.editing) {
+    // leaving edit mode: capture pending rich edits, re-render canonical
+    if ((t.editSurface || 'rich') === 'rich') t.text = richToMarkdown(t);
+    t.editing = false;
+    t.html = await buildHtml(t.kind, { text: t.text });
+    saveEditor(t);
+  } else {
+    t.editing = true;
+    t.editSurface = t.editSurface || 'rich'; // edit the text, not the syntax
+  }
   renderActive();
 }
 
+async function setEditSurface(surface) {
+  const t = activeTab();
+  if (!t || !t.editing) return;
+  if (t.editSurface === surface) return;
+  if (t.editSurface !== 'source') t.text = richToMarkdown(t); // capture rich edits
+  t.editSurface = surface;
+  t.html = await buildHtml(t.kind, { text: t.text });
+  renderActive();
+}
+
+/* Rich (WYSIWYG-style) editing: the rendered view itself becomes editable;
+   on save the DOM is converted back to markdown. Diagram/math blocks are
+   atomic (contenteditable=false) and restored from their original source. */
+function applyRichState(t) {
+  const rich = !!(t && t.editing && (t.editSurface || 'rich') === 'rich' && TEXT_KINDS.includes(t.kind));
+  contentEl.contentEditable = rich ? 'true' : 'false';
+  document.body.classList.toggle('rich-editing', rich);
+  const pill = $('edit-pill');
+  pill.hidden = !(t && t.editing && TEXT_KINDS.includes(t.kind));
+  if (!pill.hidden) {
+    $('pill-rich').classList.toggle('sel', (t.editSurface || 'rich') === 'rich');
+    $('pill-source').classList.toggle('sel', t.editSurface === 'source');
+  }
+  if (rich) {
+    try { document.execCommand('defaultParagraphSeparator', false, 'p'); } catch (_) {}
+    contentEl.querySelectorAll('.mermaid, .katex-display, .katex').forEach(el =>
+      el.setAttribute('contenteditable', 'false'));
+    contentEl.querySelectorAll('input[type="checkbox"]').forEach(cb => { cb.disabled = false; });
+  }
+}
+
+function isRichEditing() {
+  const t = activeTab();
+  return !!(t && t.editing && (t.editSurface || 'rich') === 'rich' && TEXT_KINDS.includes(t.kind));
+}
+
+function richToMarkdown(t) {
+  if (t.kind === 'text') return contentEl.innerText.replace(/\n+$/, '\n');
+  const clone = contentEl.cloneNode(true);
+  clone.querySelectorAll('img[data-orig-src]').forEach(i => i.setAttribute('src', i.getAttribute('data-orig-src')));
+  clone.querySelectorAll('.mermaid').forEach(d => {
+    const pre = document.createElement('pre');
+    const code = document.createElement('code');
+    code.className = 'language-mermaid';
+    code.textContent = d.dataset.src || '';
+    pre.appendChild(code);
+    d.replaceWith(pre);
+  });
+  clone.querySelectorAll('.katex-display').forEach(k => {
+    const ann = k.querySelector('annotation[encoding="application/x-tex"]');
+    k.replaceWith(document.createTextNode('\n$$' + (ann ? ann.textContent : '') + '$$\n'));
+  });
+  clone.querySelectorAll('.katex').forEach(k => {
+    const ann = k.querySelector('annotation[encoding="application/x-tex"]');
+    k.replaceWith(document.createTextNode('$' + (ann ? ann.textContent : '') + '$'));
+  });
+  clone.querySelectorAll('[contenteditable]').forEach(el => el.removeAttribute('contenteditable'));
+  return htmlToMarkdown(clone.innerHTML);
+}
+
+let richTimer = null;
+function onRichInput() {
+  const t = activeTab();
+  if (!t || !isRichEditing()) return;
+  setDirty(t, true);
+  clearTimeout(richTimer);
+  richTimer = setTimeout(() => {
+    t.text = richToMarkdown(t);
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => saveEditor(t), 500);
+  }, 500);
+}
+
 function syncEditorPane(t) {
-  const editing = !!(t && t.editing && TEXT_KINDS.includes(t.kind));
+  const editing = !!(t && t.editing && t.editSurface === 'source' && TEXT_KINDS.includes(t.kind));
   document.body.classList.toggle('editing', editing);
   $('editor-pane').hidden = !editing;
   if (!editing) return;
@@ -1358,7 +1541,7 @@ async function saveEditor(t) {
 const stem = (name) => name.replace(/\.[^.]+$/, '');
 
 function htmlToMarkdown(html) {
-  const td = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' });
+  const td = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced', bulletListMarker: '-' });
   if (window.turndownPluginGfm) td.use(turndownPluginGfm.gfm);
   return td.turndown(html);
 }
@@ -2204,6 +2387,11 @@ function wireGlobal() {
   $('toc-toggle').addEventListener('click', toggleSidebar);
   $('edit-btn').addEventListener('click', toggleEdit);
   $('reader-btn').addEventListener('click', openReadingMode);
+  $('pill-rich').addEventListener('click', () => setEditSurface('rich'));
+  $('pill-source').addEventListener('click', () => setEditSurface('source'));
+  $('pill-done').addEventListener('click', toggleEdit);
+  contentEl.addEventListener('input', onRichInput);
+  contentEl.addEventListener('change', onRichInput); // task-list checkboxes
   document.querySelectorAll('#side-tabs button').forEach(b =>
     b.addEventListener('click', () => { sideMode = b.dataset.m; updateSidebar(); }));
   $('open-external').addEventListener('click', () => {
@@ -2224,7 +2412,11 @@ function wireGlobal() {
     else if (mod && e.key === 'e') { e.preventDefault(); toggleEdit(); }
     else if (mod && e.key === 'm' && !e.altKey) { e.preventDefault(); toggleMap(); }
     else if (mod && e.key === 'p') { e.preventDefault(); window.print(); }
-    else if (mod && e.key === 'b') { e.preventDefault(); toggleSidebar(); }
+    else if (mod && e.key === 'b') {
+      e.preventDefault();
+      if (isRichEditing()) document.execCommand('bold'); else toggleSidebar();
+    }
+    else if (mod && e.key === 'i' && isRichEditing()) { e.preventDefault(); document.execCommand('italic'); }
     else if (mod && e.shiftKey && (e.key === 'o' || e.key === 'O')) { e.preventDefault(); openFolder(); }
     else if (mod && e.key === 'g') { e.preventDefault(); toggleGraph(); }
     else if (mod && e.key === 'j') { e.preventDefault(); toggleAiPanel(); }

@@ -100,6 +100,16 @@
         "description": "Plain text",
         "role": "Viewer",
         "mimeType": "text/plain"
+      },
+      {
+        "ext": [
+          "html",
+          "htm"
+        ],
+        "name": "HTML",
+        "description": "HTML document",
+        "role": "Viewer",
+        "mimeType": "text/html"
       }
     ]
   }

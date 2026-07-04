@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Styled HTML Demo</title>
+<style>
+  body { font-family: Georgia, serif; background: #1c2331; color: #e8eaf0; margin: 0; padding: 40px; }
+  .hero { background: linear-gradient(135deg, #5b4b8a, #2d6a8a); border-radius: 16px; padding: 40px; text-align: center; }
+  h1 { margin: 0; font-size: 2.4em; }
+  h2 { color: #8ec9e8; border-bottom: 2px solid #3a4a63; padding-bottom: 8px; margin-top: 40px; }
+  .cards { display: flex; gap: 16px; margin-top: 20px; }
+  .card { flex: 1; background: #263042; border-radius: 12px; padding: 20px; }
+  .badge { display: inline-block; background: #e8b34b; color: #1c2331; padding: 2px 12px; border-radius: 999px; font-weight: bold; }
+</style>
+</head>
+<body>
+  <div class="hero"><h1>This page keeps its own design</h1><p><span class="badge">Rendered by Sutra</span></p></div>
+  <h2>Section One</h2>
+  <div class="cards"><div class="card">Gradient hero, custom fonts, flex cards — all the page's own CSS.</div><div class="card">Scripts are stripped; styling is preserved.</div></div>
+  <h2>Section Two</h2>
+  <p>Searchable text lives here: xyzzy-marker.</p>
+  <h2>Section Three</h2>
+  <p>The sidebar TOC is built from these headings.</p>
+</body>
+</html>
