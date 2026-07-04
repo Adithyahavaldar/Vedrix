@@ -9,7 +9,15 @@ body {
   display: flex; flex-direction: column;
   background: var(--bg);
   color: var(--fg);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+/* token fallbacks so the app is styled even before a theme attribute resolves */
+:root {
+  --panel2: var(--panel);
+  --accent-fg: #ffffff;
+  --code-bg: var(--panel);
+  --card: var(--bg);
 }
 
 /* ---- Top bar / tab strip ---- */
@@ -215,8 +223,37 @@ body.mac #topbar { padding-left: 84px; } /* room for macOS traffic lights (overl
   font-size: var(--reader-fs, 16px);
   background: transparent;
 }
-html[data-font="serif"] .markdown-body { font-family: "Iowan Old Style", "Palatino", Georgia, "Times New Roman", serif; }
-html[data-font="mono"] .markdown-body { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+html[data-font="serif"] .markdown-body { font-family: 'Newsreader', "Iowan Old Style", Georgia, serif; }
+html[data-font="mono"] .markdown-body { font-family: 'Geist Mono', ui-monospace, "SF Mono", Menlo, monospace; }
+
+/* ---- Design-system reader typography (Newsreader headings / Hanken body /
+        Geist Mono code) — overrides the vendored GitHub markdown CSS ---- */
+.markdown-body {
+  font-family: 'Hanken Grotesk', -apple-system, system-ui, sans-serif;
+  font-size: 16.5px; line-height: 1.7; color: var(--fg);
+}
+.markdown-body h1, .markdown-body h2 {
+  font-family: 'Newsreader', Georgia, serif; font-weight: 600;
+  border-bottom: none; letter-spacing: -0.01em;
+}
+.markdown-body h1 { font-size: 38px; line-height: 1.14; margin: 0 0 8px; }
+.markdown-body h2 { font-size: 26px; margin: 30px 0 14px; }
+.markdown-body h3 { font-size: 18px; font-weight: 700; margin: 24px 0 12px; }
+.markdown-body h4 { font-size: 15px; font-weight: 700; margin: 20px 0 8px; }
+.markdown-body blockquote {
+  border-left: 3px solid var(--accent); color: var(--text-muted);
+  font-family: 'Newsreader', Georgia, serif; font-style: italic; font-size: 17px;
+  padding: 2px 0 2px 18px;
+}
+.markdown-body code, .markdown-body tt {
+  font-family: 'Geist Mono', ui-monospace, Menlo, monospace; font-size: 0.86em;
+  background: var(--code-bg); border-radius: 5px; padding: 1px 6px;
+}
+.markdown-body pre { background: var(--code-bg); border-radius: 10px; }
+.markdown-body pre code { background: transparent; padding: 0; font-size: 13px; }
+.markdown-body a { color: var(--accent); }
+.markdown-body table th { background: var(--panel); }
+.markdown-body h1:first-child, .markdown-body h2:first-child { margin-top: 0; }
 
 /* plain-text documents */
 .markdown-body pre.plaintext {
