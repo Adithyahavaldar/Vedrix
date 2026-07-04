@@ -1862,6 +1862,94 @@ function applyLink() {
   closeLinkPop();
 }
 
+/* ---------- Icon set (design stroke family) ---------- */
+
+const ICON_PATHS = {
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  swap: '<path d="M7 4l-3 3 3 3M4 7h13M17 20l3-3-3-3M20 17H7"/>',
+  pencil: '<path d="M4 20h4L18 8l-4-4L4 16z"/>',
+  map: '<circle cx="12" cy="12" r="3"/><path d="M12 4v4M12 16v4M4 12h4M16 12h4"/>',
+  export: '<path d="M12 15V4M8 8l4-4 4 4"/><path d="M5 15v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/>',
+  theme: '<circle cx="12" cy="12" r="4.2"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2"/>',
+  ai: '<path d="M12 2l1.9 6.1L20 10l-6.1 1.9L12 18l-1.9-6.1L4 10l6.1-1.9z"/>',
+  find: '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/>',
+  doc: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/>',
+  present: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M12 16v4M8 20h8"/>',
+};
+function svgIcon(name, filled) {
+  return `<svg viewBox="0 0 24 24">${ICON_PATHS[name] || ''}</svg>`.replace('<svg ', filled ? '<svg data-filled ' : '<svg ');
+}
+
+/* ---------- Command palette (⌘K) ---------- */
+
+const cmdState = { items: [], filtered: [], idx: 0 };
+
+function cmdActions() {
+  const t = activeTab();
+  const list = [
+    { id: 'newtab', label: 'Open a document', hint: '⌘O', icon: 'plus', run: openViaPicker },
+    { id: 'find', label: 'Find in document', hint: '⌘F', icon: 'find', run: () => { closeCmd(); openFind(); } },
+  ];
+  if (t && (t.kind === 'md' || t.kind === 'text')) list.push({ id: 'edit', label: t.editing ? 'Stop editing' : 'Edit document', hint: '⌘E', icon: 'pencil', run: () => { closeCmd(); toggleEdit(); } });
+  if (t && t.kind === 'html') list.push({ id: 'mode', label: 'Toggle Reader / Live', hint: '', icon: 'swap', run: () => { closeCmd(); toggleHtmlMode(); } });
+  if (t && t.kind === 'pdf') list.push({ id: 'reader', label: 'Reading mode (PDF → Markdown)', hint: '', icon: 'swap', run: () => { closeCmd(); openReadingMode(); } });
+  if (t && t.kind !== 'unsupported') list.push({ id: 'map', label: 'Open mind map', hint: '⌘M', icon: 'map', run: () => { closeCmd(); toggleMap(); } });
+  list.push({ id: 'ai', label: 'Open AI assistant', hint: '⌘J', icon: 'ai', filled: true, run: () => { closeCmd(); if ($('ai-panel').hidden) toggleAiPanel(); } });
+  if (t) list.push({ id: 'summarize', label: 'Summarize this document', hint: 'AI', icon: 'ai', filled: true, run: () => { closeCmd(); toggleAiPanel(true); if (typeof aiQuick === 'function') aiQuick('summarize'); } });
+  if (t) list.push({ id: 'export', label: 'Export…', hint: '', icon: 'export', run: () => { closeCmd(); exportActive('md'); } });
+  list.push({ id: 'open-folder', label: 'Open a folder (wiki mode)', hint: '⌘⇧O', icon: 'doc', run: () => { closeCmd(); if (typeof openFolder === 'function') openFolder(); } });
+  for (const th of THEMES) list.push({ id: 'theme:' + th.key, label: 'Theme: ' + th.label, hint: '', icon: 'theme', sw: th.sw, run: () => { settings.theme = th.key; saveSettings(); applySettings(); closeCmd(); } });
+  return list;
+}
+
+function openCmd() {
+  cmdState.items = cmdActions();
+  cmdState.idx = 0;
+  $('cmd-overlay').hidden = false;
+  $('cmd-input').value = '';
+  filterCmd('');
+  $('cmd-input').focus();
+}
+function closeCmd() { $('cmd-overlay').hidden = true; }
+
+function filterCmd(q) {
+  const lq = q.toLowerCase().trim();
+  cmdState.filtered = lq ? cmdState.items.filter(a => a.label.toLowerCase().includes(lq)) : cmdState.items;
+  cmdState.idx = Math.min(cmdState.idx, Math.max(0, cmdState.filtered.length - 1));
+  renderCmd();
+}
+
+function renderCmd() {
+  const list = $('cmd-list');
+  list.innerHTML = '';
+  if (!cmdState.filtered.length) { list.innerHTML = '<div class="cmd-none">No matching actions</div>'; return; }
+  cmdState.filtered.forEach((a, i) => {
+    const row = document.createElement('button');
+    row.className = 'cmd-row' + (i === cmdState.idx ? ' sel' : '');
+    const swatch = a.sw ? `<span class="cmd-sw">${a.sw.map(c => `<i style="background:${c}"></i>`).join('')}</span>` : '';
+    row.innerHTML = `<span class="cmd-ic${a.filled ? ' filled' : ''}">${svgIcon(a.icon, a.filled)}</span><span class="cmd-label"></span>${swatch}${a.hint ? `<span class="cmd-hint">${a.hint}</span>` : ''}`;
+    row.querySelector('.cmd-label').textContent = a.label;
+    row.addEventListener('mousemove', () => { if (cmdState.idx !== i) { cmdState.idx = i; renderCmd(); } });
+    row.addEventListener('click', () => a.run());
+    list.appendChild(row);
+  });
+}
+
+function cmdKeydown(e) {
+  const n = cmdState.filtered.length;
+  if (e.key === 'Escape') { e.preventDefault(); closeCmd(); }
+  else if (e.key === 'ArrowDown') { e.preventDefault(); cmdState.idx = (cmdState.idx + 1) % n; renderCmd(); scrollCmdSel(); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); cmdState.idx = (cmdState.idx - 1 + n) % n; renderCmd(); scrollCmdSel(); }
+  else if (e.key === 'Enter') { e.preventDefault(); const a = cmdState.filtered[cmdState.idx]; if (a) a.run(); }
+}
+function scrollCmdSel() { const el = $('cmd-list').querySelector('.cmd-row.sel'); if (el) el.scrollIntoView({ block: 'nearest' }); }
+
+function wireCmd() {
+  $('cmd-input').addEventListener('input', (e) => filterCmd(e.target.value));
+  $('cmd-input').addEventListener('keydown', cmdKeydown);
+  $('cmd-overlay').addEventListener('mousedown', (e) => { if (e.target === $('cmd-overlay')) closeCmd(); });
+}
+
 /* ---------- Selection bubble (floating mini-toolbar) ---------- */
 
 function updateSelBubble() {
@@ -3004,9 +3092,10 @@ async function aiTranslate() {
   } finally { aiBusy = false; }
 }
 
-function toggleAiPanel() {
+function toggleAiPanel(wantOpen) {
   const panel = $('ai-panel');
-  panel.hidden = !panel.hidden;
+  panel.hidden = wantOpen === true ? false : (wantOpen === false ? true : !panel.hidden);
+  $('ai-btn').classList.toggle('on', !panel.hidden);
   if (!panel.hidden) { renderAiChat(); $('ai-input').focus(); }
 }
 
@@ -3342,7 +3431,7 @@ window.addEventListener('message', (e) => {
 function wireGlobal() {
   $('open-btn').addEventListener('click', openViaPicker);
   $('new-tab').addEventListener('click', openViaPicker);
-  $('search-chip').addEventListener('click', openFind); // becomes ⌘K palette in D2
+  $('search-chip').addEventListener('click', openCmd);
   $('toc-toggle').addEventListener('click', toggleSidebar);
   $('edit-btn').addEventListener('click', toggleEdit);
   $('reader-btn').addEventListener('click', () => {
@@ -3379,7 +3468,7 @@ function wireGlobal() {
       if (isRichEditing()) EDITOR_CMDS.bold(); else toggleSidebar();
     }
     else if (mod && e.key === 'i' && isRichEditing()) { e.preventDefault(); EDITOR_CMDS.italic(); }
-    else if (mod && e.key === 'k' && isRichEditing()) { e.preventDefault(); openLinkPop(); }
+    else if (mod && e.key === 'k') { e.preventDefault(); if (isRichEditing()) openLinkPop(); else openCmd(); }
     else if (mod && !e.shiftKey && e.key === 'z' && isRichEditing()) { e.preventDefault(); editUndo(); }
     else if (mod && e.shiftKey && (e.key === 'z' || e.key === 'Z') && isRichEditing()) { e.preventDefault(); editRedo(); }
     else if (mod && e.shiftKey && (e.key === 'o' || e.key === 'O')) { e.preventDefault(); openFolder(); }
@@ -3395,6 +3484,7 @@ function wireGlobal() {
       $('settings-overlay').hidden = true;
       $('history-panel').hidden = true;
       $('shortcuts-overlay').hidden = true;
+      $('cmd-overlay').hidden = true;
       if (!$('findbar').hidden) closeFind();
     }
     else if (mod && e.altKey && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {
@@ -3407,6 +3497,7 @@ function wireGlobal() {
     }
   });
   wireFind();
+  wireCmd();
   wireEditorToolbar();
   wireSelBubble();
   wireRichTyping();

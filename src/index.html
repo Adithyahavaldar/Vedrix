@@ -11,8 +11,8 @@
 <link rel="stylesheet" href="vendor/fonts/fonts.css">
 <link rel="stylesheet" href="vendor/katex.min.css">
 <link rel="stylesheet" href="vendor/codemirror.css">
-<link rel="stylesheet" href="app.css?v=118">
-<link rel="stylesheet" href="themes.css?v=118">
+<link rel="stylesheet" href="app.css?v=119">
+<link rel="stylesheet" href="themes.css?v=119">
 </head>
 <body>
   <div id="topbar" data-tauri-drag-region>
@@ -114,6 +114,17 @@
   </div>
 
   <div id="slash-menu" hidden></div>
+
+  <div id="cmd-overlay" hidden>
+    <div id="cmd-palette">
+      <div id="cmd-search">
+        <svg viewBox="0 0 24 24" width="17" height="17"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
+        <input id="cmd-input" type="text" placeholder="Search actions, themes, documents…" spellcheck="false" autocomplete="off">
+        <span class="kbd">esc</span>
+      </div>
+      <div id="cmd-list"></div>
+    </div>
+  </div>
 
   <div id="block-handle" hidden title="Drag to move · click to select">⠿</div>
 
