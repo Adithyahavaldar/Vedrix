@@ -701,6 +701,64 @@ body.editing #scroller { flex: 1; }
 #edit-pill button:hover { background: var(--hover); }
 #edit-pill button.sel { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); font-weight: 600; }
 
+/* ---- Editor toolbar (rich edit mode) ---- */
+#edit-toolbar {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 2px;
+  padding: 4px 10px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-user-select: none; user-select: none;
+}
+#edit-toolbar::-webkit-scrollbar { display: none; }
+#edit-toolbar[hidden] { display: none; }
+#edit-toolbar .tb {
+  flex: 0 0 auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 30px; height: 30px; padding: 0 7px;
+  font: inherit; font-size: 14px;
+  color: var(--fg);
+  background: transparent;
+  border: none; border-radius: 6px;
+  cursor: pointer;
+}
+#edit-toolbar .tb:hover { background: var(--hover); }
+#edit-toolbar .tb.on { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+#edit-toolbar .tb-mono { font-family: ui-monospace, monospace; font-size: 11.5px; }
+#edit-toolbar .tb-sep { flex: 0 0 1px; height: 18px; background: var(--border); margin: 0 6px; }
+#edit-toolbar .spacer { flex: 1 1 0; min-width: 8px; }
+#tb-block {
+  flex: 0 0 auto;
+  font: inherit; font-size: 12.5px;
+  padding: 4px 6px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg); color: var(--fg);
+  max-width: 130px;
+}
+
+/* link popover */
+#link-pop {
+  position: absolute;
+  display: flex; align-items: center; gap: 5px;
+  padding: 6px;
+  background: var(--panel);
+  border: 1px solid var(--border); border-radius: 9px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.22);
+  z-index: 70;
+}
+#link-pop[hidden] { display: none; }
+#link-input {
+  font: inherit; font-size: 13px;
+  width: 240px;
+  padding: 5px 8px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg); color: var(--fg);
+  outline: none;
+}
+#link-input:focus { border-color: var(--accent); }
+
 /* rich editing: subtle affordance that the page is now editable */
 body.rich-editing #content { outline: none; caret-color: var(--accent); }
 body.rich-editing #scroller { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent); }

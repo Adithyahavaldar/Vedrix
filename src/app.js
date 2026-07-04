@@ -1450,6 +1450,8 @@ async function toggleEdit() {
   } else {
     t.editing = true;
     t.editSurface = t.editSurface || 'rich'; // edit the text, not the syntax
+    historyReset();
+    setTimeout(historySnapshot, 80); // baseline for undo
   }
   renderActive();
 }
@@ -1461,6 +1463,7 @@ async function setEditSurface(surface) {
   if (t.editSurface !== 'source') t.text = richToMarkdown(t); // capture rich edits
   t.editSurface = surface;
   t.html = await buildHtml(t.kind, { text: t.text });
+  if (surface === 'rich') { historyReset(); setTimeout(historySnapshot, 80); }
   renderActive();
 }
 
@@ -1471,6 +1474,8 @@ function applyRichState(t) {
   const rich = !!(t && t.editing && (t.editSurface || 'rich') === 'rich' && TEXT_KINDS.includes(t.kind));
   contentEl.contentEditable = rich ? 'true' : 'false';
   document.body.classList.toggle('rich-editing', rich);
+  $('edit-toolbar').hidden = !rich;
+  if (!rich) { closeLinkPop(); }
   const pill = $('edit-pill');
   pill.hidden = !(t && t.editing && TEXT_KINDS.includes(t.kind));
   if (!pill.hidden) {
@@ -1514,6 +1519,315 @@ function richToMarkdown(t) {
   return htmlToMarkdown(clone.innerHTML);
 }
 
+/* ---------- Editor history (undo/redo) ----------
+   Native contenteditable undo can't survive programmatic DOM commands,
+   so we own history: innerHTML snapshots + node-path selection bookmarks. */
+
+const editHistory = { stack: [], idx: -1, max: 200, silent: false };
+
+function nodePath(node) {
+  const p = [];
+  while (node && node !== contentEl) {
+    const parent = node.parentNode;
+    if (!parent) return null;
+    p.unshift([...parent.childNodes].indexOf(node));
+    node = parent;
+  }
+  return node === contentEl ? p : null;
+}
+
+function nodeFromPath(p) {
+  let n = contentEl;
+  for (const i of p) { n = n.childNodes[i]; if (!n) return null; }
+  return n;
+}
+
+function saveSelection() {
+  const s = getSelection();
+  if (!s.rangeCount) return null;
+  const r = s.getRangeAt(0);
+  if (!contentEl.contains(r.startContainer)) return null;
+  const sp = nodePath(r.startContainer), ep = nodePath(r.endContainer);
+  if (!sp || !ep) return null;
+  return { sp, so: r.startOffset, ep, eo: r.endOffset };
+}
+
+function restoreSelection(sel) {
+  if (!sel) return;
+  const sn = nodeFromPath(sel.sp), en = nodeFromPath(sel.ep);
+  if (!sn || !en) return;
+  try {
+    const lim = n => n.nodeType === 3 ? n.length : n.childNodes.length;
+    const r = document.createRange();
+    r.setStart(sn, Math.min(sel.so, lim(sn)));
+    r.setEnd(en, Math.min(sel.eo, lim(en)));
+    const s = getSelection();
+    s.removeAllRanges();
+    s.addRange(r);
+  } catch (_) {}
+}
+
+function historyReset() {
+  editHistory.stack = [];
+  editHistory.idx = -1;
+}
+
+function historySnapshot() {
+  if (editHistory.silent || !isRichEditing()) return;
+  const html = contentEl.innerHTML;
+  if (editHistory.idx >= 0 && editHistory.stack[editHistory.idx].html === html) return;
+  editHistory.stack.length = editHistory.idx + 1; // drop redo tail
+  editHistory.stack.push({ html, sel: saveSelection() });
+  if (editHistory.stack.length > editHistory.max) editHistory.stack.shift();
+  editHistory.idx = editHistory.stack.length - 1;
+}
+
+function applyHistoryEntry() {
+  const s = editHistory.stack[editHistory.idx];
+  if (!s) return;
+  editHistory.silent = true;
+  contentEl.innerHTML = s.html;
+  applyRichState(activeTab());
+  restoreSelection(s.sel);
+  editHistory.silent = false;
+  onRichInput(); // mark dirty + schedule save from restored state
+}
+
+function editUndo() { if (editHistory.idx > 0) { historySnapshot(); editHistory.idx--; applyHistoryEntry(); } }
+function editRedo() { if (editHistory.idx < editHistory.stack.length - 1) { editHistory.idx++; applyHistoryEntry(); } }
+
+/* ---------- Editor commands ---------- */
+
+function selElement() {
+  const s = getSelection();
+  if (!s.rangeCount) return null;
+  const n = s.getRangeAt(0).commonAncestorContainer;
+  const el = n.nodeType === 1 ? n : n.parentElement;
+  return el && contentEl.contains(el) ? el : null;
+}
+
+function currentBlock() {
+  let el = selElement();
+  while (el && el.parentElement !== contentEl) el = el.parentElement;
+  return el;
+}
+
+function placeCaret(el, atStart) {
+  const r = document.createRange();
+  r.selectNodeContents(el);
+  r.collapse(!!atStart);
+  const s = getSelection();
+  s.removeAllRanges();
+  s.addRange(r);
+}
+
+function insertBlockAfterCurrent(el) {
+  const blk = currentBlock();
+  if (blk) blk.after(el); else contentEl.appendChild(el);
+  const p = document.createElement('p');
+  p.innerHTML = '<br>';
+  el.after(p);
+  placeCaret(p, true);
+}
+
+function toggleInlineCode() {
+  const el = selElement();
+  const codeAnc = el && el.closest('code');
+  if (codeAnc && contentEl.contains(codeAnc) && !codeAnc.closest('pre')) {
+    const parent = codeAnc.parentNode;
+    while (codeAnc.firstChild) parent.insertBefore(codeAnc.firstChild, codeAnc);
+    parent.removeChild(codeAnc);
+    return;
+  }
+  const s = getSelection();
+  if (!s.rangeCount || s.getRangeAt(0).collapsed) return;
+  const r = s.getRangeAt(0);
+  const code = document.createElement('code');
+  try { r.surroundContents(code); }
+  catch (_) { code.appendChild(r.extractContents()); r.insertNode(code); }
+}
+
+function toggleTask() {
+  let el = selElement();
+  let li = el && el.closest('li');
+  if (!li) { document.execCommand('insertUnorderedList'); el = selElement(); li = el && el.closest('li'); }
+  if (!li || !contentEl.contains(li)) return;
+  const existing = li.querySelector(':scope > input[type="checkbox"]');
+  if (existing) {
+    existing.remove();
+    li.classList.remove('task-list-item');
+  } else {
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    li.classList.add('task-list-item');
+    li.prepend(cb, ' ');
+    const list = li.closest('ul, ol');
+    if (list) list.classList.add('contains-task-list');
+  }
+}
+
+function insertTable() {
+  const tbl = document.createElement('table');
+  tbl.innerHTML = '<thead><tr><th>Column 1</th><th>Column 2</th><th>Column 3</th></tr></thead>'
+    + '<tbody>' + '<tr><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></tr>'.repeat(2) + '</tbody>';
+  insertBlockAfterCurrent(tbl);
+  placeCaret(tbl.querySelector('td'), true);
+}
+
+async function insertImage() {
+  const t = activeTab();
+  if (!TAURI || !t || !t.path) return;
+  const picked = await TAURI.core.invoke('plugin:dialog|open', {
+    options: { filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'] }], multiple: false, directory: false },
+  });
+  if (!picked) return;
+  const abs = typeof picked === 'string' ? picked : picked.path;
+  const dir = t.path.slice(0, t.path.lastIndexOf('/') + 1);
+  const rel = abs.startsWith(dir) ? abs.slice(dir.length) : abs;
+  const img = document.createElement('img');
+  img.setAttribute('data-orig-src', rel);
+  img.src = TAURI.core.convertFileSrc(abs);
+  img.alt = rel.split('/').pop();
+  const p = document.createElement('p');
+  p.appendChild(img);
+  insertBlockAfterCurrent(p);
+}
+
+function insertMathBlock() {
+  const p = document.createElement('p');
+  p.textContent = '$$ E = mc^2 $$';
+  insertBlockAfterCurrent(p);
+  placeCaret(p, false);
+}
+
+function insertMermaidBlock() {
+  const pre = document.createElement('pre');
+  const code = document.createElement('code');
+  code.className = 'language-mermaid';
+  code.textContent = 'flowchart LR\n  A[Start] --> B[Finish]';
+  pre.appendChild(code);
+  insertBlockAfterCurrent(pre);
+}
+
+function setBlockType(v) {
+  // formatBlock is still the most reliable cross-webview block transform
+  document.execCommand('formatBlock', false, v === 'p' ? 'p' : v);
+}
+
+/* ---------- Link popover ---------- */
+
+let linkSavedSel = null;
+
+function openLinkPop() {
+  if (!isRichEditing()) return;
+  const s = getSelection();
+  if (!s.rangeCount) return;
+  linkSavedSel = saveSelection();
+  const el = selElement();
+  const a = el && el.closest('a');
+  $('link-input').value = a ? a.getAttribute('href') : '';
+  const rect = s.getRangeAt(0).getBoundingClientRect();
+  const mainRect = $('main').getBoundingClientRect();
+  const pop = $('link-pop');
+  pop.hidden = false;
+  pop.style.left = Math.max(8, Math.min(rect.left - mainRect.left, mainRect.width - 320)) + 'px';
+  pop.style.top = (rect.bottom - mainRect.top + 8) + 'px';
+  $('link-input').focus();
+}
+
+function closeLinkPop() { $('link-pop').hidden = true; linkSavedSel = null; }
+
+function applyLink() {
+  const url = $('link-input').value.trim();
+  restoreSelection(linkSavedSel);
+  execEditorCmd(() => {
+    if (!url) { document.execCommand('unlink'); return; }
+    const el = selElement();
+    const a = el && el.closest('a');
+    if (a && contentEl.contains(a)) a.setAttribute('href', url);
+    else document.execCommand('createLink', false, url);
+  });
+  closeLinkPop();
+}
+
+/* ---------- Toolbar dispatch + state ---------- */
+
+function execEditorCmd(fn) {
+  if (!isRichEditing()) return;
+  historySnapshot();
+  fn();
+  historySnapshot();
+  onRichInput();
+  updateToolbarState();
+}
+
+const EDITOR_CMDS = {
+  undo: () => editUndo(),
+  redo: () => editRedo(),
+  bold: () => execEditorCmd(() => document.execCommand('bold')),
+  italic: () => execEditorCmd(() => document.execCommand('italic')),
+  strike: () => execEditorCmd(() => document.execCommand('strikeThrough')),
+  code: () => execEditorCmd(toggleInlineCode),
+  link: () => openLinkPop(),
+  ul: () => execEditorCmd(() => document.execCommand('insertUnorderedList')),
+  ol: () => execEditorCmd(() => document.execCommand('insertOrderedList')),
+  task: () => execEditorCmd(toggleTask),
+  hr: () => execEditorCmd(() => insertBlockAfterCurrent(document.createElement('hr'))),
+  table: () => execEditorCmd(insertTable),
+  image: () => insertImage().then(() => { historySnapshot(); onRichInput(); }),
+  math: () => execEditorCmd(insertMathBlock),
+  mermaid: () => execEditorCmd(insertMermaidBlock),
+  aa: () => { $('settings-overlay').hidden = false; },
+};
+
+function updateToolbarState() {
+  if ($('edit-toolbar').hidden) return;
+  const el = selElement();
+  const q = (cmd) => { try { return document.queryCommandState(cmd); } catch (_) { return false; } };
+  const mark = (name, on) => {
+    const b = document.querySelector(`#edit-toolbar [data-cmd="${name}"]`);
+    if (b) b.classList.toggle('on', !!on);
+  };
+  mark('bold', q('bold'));
+  mark('italic', q('italic'));
+  mark('strike', q('strikeThrough'));
+  mark('code', el && el.closest('code') && !el.closest('pre'));
+  mark('link', el && el.closest('a'));
+  const blk = currentBlock();
+  const tag = blk ? blk.tagName.toLowerCase() : 'p';
+  $('tb-block').value = ['h1', 'h2', 'h3', 'h4', 'blockquote', 'pre'].includes(tag) ? tag
+    : (blk && blk.querySelector && (tag === 'ul' || tag === 'ol')) ? 'p' : 'p';
+}
+
+function wireEditorToolbar() {
+  $('edit-toolbar').addEventListener('mousedown', (e) => {
+    // keep the text selection: don't let toolbar clicks steal focus
+    if (e.target.closest('button, select') && !e.target.closest('#tb-block')) e.preventDefault();
+  });
+  $('edit-toolbar').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-cmd]');
+    if (btn && EDITOR_CMDS[btn.dataset.cmd]) EDITOR_CMDS[btn.dataset.cmd]();
+  });
+  $('tb-block').addEventListener('change', (e) => {
+    execEditorCmd(() => setBlockType(e.target.value));
+    contentEl.focus();
+  });
+  document.addEventListener('selectionchange', () => {
+    if (!isRichEditing()) return;
+    clearTimeout(window._tbStateTimer);
+    window._tbStateTimer = setTimeout(updateToolbarState, 120);
+  });
+  $('link-apply').addEventListener('click', applyLink);
+  $('link-remove').addEventListener('click', () => { $('link-input').value = ''; applyLink(); });
+  $('link-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); applyLink(); }
+    else if (e.key === 'Escape') { e.preventDefault(); closeLinkPop(); }
+  });
+  document.addEventListener('mousedown', (e) => {
+    if (!$('link-pop').hidden && !e.target.closest('#link-pop')) closeLinkPop();
+  });
+}
+
 let richTimer = null;
 function onRichInput() {
   const t = activeTab();
@@ -1522,6 +1836,7 @@ function onRichInput() {
   clearTimeout(richTimer);
   richTimer = setTimeout(() => {
     t.text = richToMarkdown(t);
+    historySnapshot(); // typing checkpoint for undo
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => saveEditor(t), 500);
   }, 500);
@@ -2489,9 +2804,12 @@ function wireGlobal() {
     else if (mod && e.key === 'p') { e.preventDefault(); window.print(); }
     else if (mod && e.key === 'b') {
       e.preventDefault();
-      if (isRichEditing()) document.execCommand('bold'); else toggleSidebar();
+      if (isRichEditing()) EDITOR_CMDS.bold(); else toggleSidebar();
     }
-    else if (mod && e.key === 'i' && isRichEditing()) { e.preventDefault(); document.execCommand('italic'); }
+    else if (mod && e.key === 'i' && isRichEditing()) { e.preventDefault(); EDITOR_CMDS.italic(); }
+    else if (mod && e.key === 'k' && isRichEditing()) { e.preventDefault(); openLinkPop(); }
+    else if (mod && !e.shiftKey && e.key === 'z' && isRichEditing()) { e.preventDefault(); editUndo(); }
+    else if (mod && e.shiftKey && (e.key === 'z' || e.key === 'Z') && isRichEditing()) { e.preventDefault(); editRedo(); }
     else if (mod && e.shiftKey && (e.key === 'o' || e.key === 'O')) { e.preventDefault(); openFolder(); }
     else if (mod && e.key === 'g') { e.preventDefault(); toggleGraph(); }
     else if (mod && e.key === 'j') { e.preventDefault(); toggleAiPanel(); }
@@ -2517,6 +2835,7 @@ function wireGlobal() {
     }
   });
   wireFind();
+  wireEditorToolbar();
   wireZoom();
   wireMap();
   wireAi();
