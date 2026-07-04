@@ -473,6 +473,9 @@ function highlightPagedToc(t) {
 
 function renderActive() {
   const t = activeTab();
+  // clear the interactive-HTML pane flags unless we're about to render live
+  // HTML — otherwise a stuck .html-live disables #scroller overflow (no scroll)
+  if (!(t && t.kind === 'html')) contentEl.classList.remove('html-host', 'html-live');
   $('live-badge').classList.toggle('on', !!(t && t.live && !t.editing));
   const rb = $('reader-btn');
   rb.hidden = !(t && (t.kind === 'pdf' || t.kind === 'html'));
