@@ -29,7 +29,7 @@ A toggle on the tab (like the PDF “Aa”) switches modes; per-tab choice remem
     -   the asset origin (`asset://` / `http://asset.localhost`) is **cross-origin from the app**, so page JS cannot touch Sutra’s DOM, settings, or Tauri IPC — isolation comes from the browser’s own origin model, not from us sanitizing anything
 -   The frame fills the pane and owns its scrolling (dashboards manage their own layout); Sutra’s scroll-thumb and reader width are disabled for this mode.
 -   `fetch()`/XHR from the page to external APIs works (dashboards often need live data). Local-first purists can stay in Reader mode.
--   **Browser dev mode:** `srcdoc` + `sandbox="allow-scripts"` (opaque origin — never combined with `allow-same-origin`); relative assets unavailable there.
+-   **Browser dev mode:** `srcdoc` + `sandbox="allow-scripts"` (opaque origin — never combined with `allow-same-origin`); relative assets unavailable there./
 
 ## Security model (explicit)
 

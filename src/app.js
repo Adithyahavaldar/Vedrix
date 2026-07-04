@@ -656,6 +656,7 @@ function buildIframeToc(t, frame) {
 
 let mermaidSeq = 0;
 async function renderEnhancements(t) {
+  if (t.kind === 'md') renderCallouts();
   // KaTeX math ($…$, $$…$$) — markdown only
   if (t.kind === 'md' && window.renderMathInElement) {
     try {
@@ -1269,6 +1270,7 @@ function openFind() {
   const t = activeTab();
   if (!t) return;
   $('findbar').hidden = false;
+  updateReplaceRow();
   $('find-input').focus();
   $('find-input').select();
 }
@@ -1475,7 +1477,9 @@ function applyRichState(t) {
   contentEl.contentEditable = rich ? 'true' : 'false';
   document.body.classList.toggle('rich-editing', rich);
   $('edit-toolbar').hidden = !rich;
-  if (!rich) { closeLinkPop(); closeSlashMenu(); $('sel-bubble').hidden = true; }
+  if (!rich) { closeLinkPop(); closeSlashMenu(); $('sel-bubble').hidden = true; $('table-tools').hidden = true; $('block-handle').hidden = true; }
+  updateReplaceRow();
+  if (rich) renderCallouts();
   const pill = $('edit-pill');
   pill.hidden = !(t && t.editing && TEXT_KINDS.includes(t.kind));
   if (!pill.hidden) {
@@ -1498,6 +1502,8 @@ function isRichEditing() {
 function richToMarkdown(t) {
   if (t.kind === 'text') return contentEl.innerText.replace(/\n+$/, '\n');
   const clone = contentEl.cloneNode(true);
+  clone.querySelectorAll('.drop-indicator').forEach(el => el.remove());
+  serializeCallouts(clone);
   clone.querySelectorAll('img[data-orig-src]').forEach(i => i.setAttribute('src', i.getAttribute('data-orig-src')));
   clone.querySelectorAll('.mermaid').forEach(d => {
     const pre = document.createElement('pre');
@@ -1799,6 +1805,9 @@ const SLASH_ITEMS = [
   { k: 'image picture photo', label: 'Image', hint: 'From a file', run: null /* async special */ },
   { k: 'math equation katex', label: 'Math block', hint: '$$ … $$', run: insertMathBlock },
   { k: 'diagram mermaid flowchart', label: 'Diagram', hint: 'Mermaid block', run: insertMermaidBlock },
+  { k: 'callout note info admonition', label: 'Callout', hint: '> [!note]', run: () => insertCallout('note') },
+  { k: 'callout warning', label: 'Callout: Warning', hint: '> [!warning]', run: () => insertCallout('warning') },
+  { k: 'callout tip', label: 'Callout: Tip', hint: '> [!tip]', run: () => insertCallout('tip') },
 ];
 
 const slashState = { active: false, query: '', sel: null, idx: 0 };
@@ -1959,6 +1968,239 @@ function wireRichTyping() {
   contentEl.addEventListener('blur', () => setTimeout(() => { if (!document.activeElement.closest('#slash-menu')) closeSlashMenu(); }, 150));
 }
 
+/* ---------- E3: block drag-to-reorder ---------- */
+
+let hoverBlock = null;
+
+function topBlockFromPoint(x, y) {
+  for (const el of contentEl.children) {
+    const r = el.getBoundingClientRect();
+    if (y >= r.top - 4 && y <= r.bottom + 4) return el;
+  }
+  return null;
+}
+
+function positionBlockHandle() {
+  const h = $('block-handle');
+  if (!isRichEditing() || !hoverBlock || !contentEl.contains(hoverBlock)) { h.hidden = true; return; }
+  const r = hoverBlock.getBoundingClientRect();
+  const mainRect = $('main').getBoundingClientRect();
+  h.hidden = false;
+  h.style.left = (r.left - mainRect.left - 22) + 'px';
+  h.style.top = (r.top - mainRect.top + 2) + 'px';
+}
+
+function wireBlockDrag() {
+  contentEl.addEventListener('mousemove', (e) => {
+    if (!isRichEditing() || dragging) return;
+    const blk = topBlockFromPoint(e.clientX, e.clientY);
+    if (blk && blk !== hoverBlock) { hoverBlock = blk; positionBlockHandle(); }
+  });
+  scrollerEl.addEventListener('scroll', () => { if (isRichEditing()) positionBlockHandle(); }, { passive: true });
+
+  let dragging = false, dragEl = null, indicator = null;
+  const handle = $('block-handle');
+  handle.addEventListener('mousedown', (e) => {
+    if (!isRichEditing() || !hoverBlock) return;
+    e.preventDefault();
+    dragging = true;
+    dragEl = hoverBlock;
+    dragEl.classList.add('block-dragging');
+    indicator = document.createElement('div');
+    indicator.className = 'drop-indicator';
+    contentEl.appendChild(indicator);
+    historySnapshot();
+    const move = (ev) => {
+      const over = topBlockFromPoint(ev.clientX, ev.clientY);
+      if (!over || over === dragEl || over === indicator) return;
+      const r = over.getBoundingClientRect();
+      const after = ev.clientY > r.top + r.height / 2;
+      over[after ? 'after' : 'before'](indicator);
+    };
+    const up = () => {
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up);
+      dragging = false;
+      dragEl.classList.remove('block-dragging');
+      if (indicator.parentNode) indicator.replaceWith(dragEl);
+      indicator = null;
+      historySnapshot();
+      onRichInput();
+      positionBlockHandle();
+    };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  });
+  handle.addEventListener('click', (e) => {
+    if (hoverBlock) { const r = document.createRange(); r.selectNode(hoverBlock); const s = getSelection(); s.removeAllRanges(); s.addRange(r); }
+  });
+}
+
+/* ---------- E3: table row/column tools ---------- */
+
+let activeCell = null;
+
+function updateTableTools() {
+  const tools = $('table-tools');
+  if (!isRichEditing()) { tools.hidden = true; return; }
+  const el = selElement();
+  const cell = el && el.closest('td, th');
+  if (!cell || !contentEl.contains(cell)) { tools.hidden = true; activeCell = null; return; }
+  activeCell = cell;
+  const table = cell.closest('table');
+  const r = table.getBoundingClientRect();
+  const mainRect = $('main').getBoundingClientRect();
+  tools.hidden = false;
+  tools.style.left = Math.max(8, r.left - mainRect.left) + 'px';
+  tools.style.top = Math.max(6, r.top - mainRect.top - tools.offsetHeight - 6) + 'px';
+}
+
+function cellIndex(cell) { return [...cell.parentElement.children].indexOf(cell); }
+
+function tableOp(op) {
+  if (!activeCell) return;
+  const cell = activeCell, row = cell.parentElement, table = cell.closest('table');
+  const ci = cellIndex(cell);
+  const allRows = [...table.querySelectorAll('tr')];
+  const newCell = (tag) => { const c = document.createElement(tag); c.innerHTML = '&nbsp;'; return c; };
+  execEditorCmd(() => {
+    if (op === 'row-above' || op === 'row-below') {
+      const tr = document.createElement('tr');
+      for (let i = 0; i < row.children.length; i++) tr.appendChild(newCell('td'));
+      row[op === 'row-above' ? 'before' : 'after'](tr);
+    } else if (op === 'col-left' || op === 'col-right') {
+      const at = ci + (op === 'col-right' ? 1 : 0);
+      allRows.forEach(tr => {
+        const isHead = tr.parentElement.tagName === 'THEAD' || tr.querySelector('th');
+        const c = newCell(isHead ? 'th' : 'td');
+        if (isHead) c.textContent = 'Column';
+        const ref = tr.children[at];
+        if (ref) tr.insertBefore(c, ref); else tr.appendChild(c);
+      });
+    } else if (op === 'del-row') {
+      if (row.closest('thead')) return; // keep header
+      if (table.querySelectorAll('tbody tr').length > 1) row.remove();
+    } else if (op === 'del-col') {
+      if (row.children.length > 1) allRows.forEach(tr => { if (tr.children[ci]) tr.children[ci].remove(); });
+    }
+  });
+  setTimeout(updateTableTools, 0);
+}
+
+function wireTableTools() {
+  $('table-tools').addEventListener('mousedown', (e) => e.preventDefault());
+  $('table-tools').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-t]');
+    if (btn) tableOp(btn.dataset.t);
+  });
+}
+
+/* ---------- E3: callouts ---------- */
+
+const CALLOUT_TYPES = { note: '📝', tip: '💡', important: '❗', warning: '⚠️', caution: '🔥' };
+
+function renderCallouts() {
+  contentEl.querySelectorAll('blockquote').forEach(bq => {
+    if (bq.classList.contains('callout')) return;
+    const m = bq.textContent.trim().match(/^\[!(\w+)\]/i);
+    if (!m) return;
+    const type = m[1].toLowerCase();
+    if (!CALLOUT_TYPES[type]) return;
+    bq.classList.add('callout');
+    bq.dataset.callout = type;
+    // strip the [!type] marker from the first NON-whitespace text node
+    const walker = document.createTreeWalker(bq, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      if (node.data.trim()) { node.data = node.data.replace(/^\s*\[!\w+\]\s?/i, ''); break; }
+    }
+    const label = document.createElement('div');
+    label.className = 'callout-head';
+    label.contentEditable = 'false';
+    label.textContent = CALLOUT_TYPES[type] + ' ' + type[0].toUpperCase() + type.slice(1);
+    bq.prepend(label);
+  });
+}
+
+function insertCallout(type) {
+  const bq = document.createElement('blockquote');
+  bq.className = 'callout';
+  bq.dataset.callout = type;
+  const label = document.createElement('div');
+  label.className = 'callout-head'; label.contentEditable = 'false';
+  label.textContent = CALLOUT_TYPES[type] + ' ' + type[0].toUpperCase() + type.slice(1);
+  const p = document.createElement('p'); p.innerHTML = 'Callout text';
+  bq.append(label, p);
+  insertBlockAfterCurrent(bq);
+  placeCaret(p, true);
+}
+
+/* callouts → markdown: strip the visual head; the blockquote.callout keeps
+   its class + data-callout so the Turndown rule can emit `> [!type]`. */
+function serializeCallouts(clone) {
+  clone.querySelectorAll('blockquote.callout .callout-head').forEach(h => h.remove());
+}
+
+/* ---------- E3: find & replace ---------- */
+
+function doReplaceOne() {
+  const t = activeTab();
+  if (!isRichEditing() || !findState.ranges.length || findState.current < 0) return;
+  const rep = $('replace-input').value;
+  const r = findState.ranges[findState.current];
+  execEditorCmd(() => {
+    r.deleteContents();
+    r.insertNode(document.createTextNode(rep));
+  });
+  setTimeout(() => { runFind(findState.query).then(() => gotoMatch(1)); }, 0);
+}
+
+function doReplaceAll() {
+  const t = activeTab();
+  if (!isRichEditing() || !findState.query) return;
+  const q = findState.query, rep = $('replace-input').value;
+  execEditorCmd(() => {
+    const walker = document.createTreeWalker(contentEl, NodeFilter.SHOW_TEXT);
+    const lq = q.toLowerCase();
+    let node, count = 0;
+    const nodes = [];
+    while ((node = walker.nextNode())) if (node.data.toLowerCase().includes(lq)) nodes.push(node);
+    for (const n of nodes) {
+      let out = '', i = 0, data = n.data;
+      const low = data.toLowerCase();
+      let j;
+      while ((j = low.indexOf(lq, i)) !== -1) { out += data.slice(i, j) + rep; i = j + q.length; count++; }
+      out += data.slice(i);
+      n.data = out;
+    }
+    $('find-count').textContent = count + ' replaced';
+  });
+  setTimeout(() => runFind(findState.query), 0);
+}
+
+function updateReplaceRow() {
+  $('replace-row').hidden = !isRichEditing();
+}
+
+/* ---------- E3: highlight ---------- */
+
+function toggleHighlight() {
+  const s = getSelection();
+  if (!s.rangeCount || s.getRangeAt(0).collapsed) return;
+  const el = selElement();
+  const mk = el && el.closest('mark');
+  if (mk && contentEl.contains(mk)) {
+    const parent = mk.parentNode;
+    while (mk.firstChild) parent.insertBefore(mk.firstChild, mk);
+    parent.removeChild(mk);
+    return;
+  }
+  const r = s.getRangeAt(0);
+  const mark = document.createElement('mark');
+  try { r.surroundContents(mark); }
+  catch (_) { mark.appendChild(r.extractContents()); r.insertNode(mark); }
+}
+
 /* ---------- Toolbar dispatch + state ---------- */
 
 function execEditorCmd(fn) {
@@ -1986,6 +2228,7 @@ const EDITOR_CMDS = {
   image: () => insertImage().then(() => { historySnapshot(); onRichInput(); }),
   math: () => execEditorCmd(insertMathBlock),
   mermaid: () => execEditorCmd(insertMermaidBlock),
+  highlight: () => execEditorCmd(toggleHighlight),
   aa: () => { $('settings-overlay').hidden = false; },
 };
 
@@ -2024,7 +2267,7 @@ function wireEditorToolbar() {
   document.addEventListener('selectionchange', () => {
     if (!isRichEditing()) return;
     clearTimeout(window._tbStateTimer);
-    window._tbStateTimer = setTimeout(() => { updateToolbarState(); updateSelBubble(); }, 120);
+    window._tbStateTimer = setTimeout(() => { updateToolbarState(); updateSelBubble(); updateTableTools(); }, 120);
   });
   $('link-apply').addEventListener('click', applyLink);
   $('link-remove').addEventListener('click', () => { $('link-input').value = ''; applyLink(); });
@@ -2123,6 +2366,18 @@ const stem = (name) => name.replace(/\.[^.]+$/, '');
 function htmlToMarkdown(html) {
   const td = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced', bulletListMarker: '-' });
   if (window.turndownPluginGfm) td.use(turndownPluginGfm.gfm);
+  // keep <mark> highlights as inline HTML (valid markdown, renders in Sutra)
+  td.keep(['mark']);
+  // callouts → GitHub-style `> [!type]` blockquote (built directly so the
+  // marker isn't escaped to \[!type\])
+  td.addRule('callout', {
+    filter: (n) => n.nodeName === 'BLOCKQUOTE' && n.classList.contains('callout'),
+    replacement: (content, node) => {
+      const type = node.getAttribute('data-callout') || 'note';
+      const body = content.replace(/^\n+|\n+$/g, '').split('\n').map(l => l ? '> ' + l : '>').join('\n');
+      return '\n> [!' + type + ']\n' + body + '\n\n';
+    },
+  });
   return td.turndown(html);
 }
 
@@ -3047,6 +3302,11 @@ function wireGlobal() {
   wireEditorToolbar();
   wireSelBubble();
   wireRichTyping();
+  wireBlockDrag();
+  wireTableTools();
+  $('replace-one').addEventListener('click', doReplaceOne);
+  $('replace-all').addEventListener('click', doReplaceAll);
+  $('replace-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doReplaceOne(); } });
   wireZoom();
   wireMap();
   wireAi();
