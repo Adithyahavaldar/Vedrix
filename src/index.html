@@ -11,8 +11,8 @@
 <link rel="stylesheet" href="vendor/fonts/fonts.css">
 <link rel="stylesheet" href="vendor/katex.min.css">
 <link rel="stylesheet" href="vendor/codemirror.css">
-<link rel="stylesheet" href="app.css?v=119">
-<link rel="stylesheet" href="themes.css?v=119">
+<link rel="stylesheet" href="app.css?v=120">
+<link rel="stylesheet" href="themes.css?v=120">
 </head>
 <body>
   <div id="topbar" data-tauri-drag-region>
@@ -115,6 +115,22 @@
 
   <div id="slash-menu" hidden></div>
 
+  <div id="project-overlay" hidden>
+    <div id="project-card">
+      <div id="proj-preview"><span id="proj-preview-icon"></span><span id="proj-preview-name">New project</span></div>
+      <label class="proj-field"><span>Name</span><input id="proj-name" type="text" placeholder="e.g. Aurora Launch" spellcheck="false"></label>
+      <div class="proj-field"><span>Color</span><div id="proj-colors" class="proj-swatches"></div></div>
+      <div class="proj-field"><span>Icon</span><div id="proj-icons" class="proj-iconset"></div></div>
+      <label class="proj-field"><span>Description <em>(optional)</em></span><input id="proj-desc" type="text" placeholder="What's this project about?" spellcheck="false"></label>
+      <div class="proj-actions">
+        <button id="proj-cancel" class="btn-ghost">Cancel</button>
+        <button id="proj-create" class="btn-accent">Create project</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="assign-menu" hidden></div>
+
   <div id="cmd-overlay" hidden>
     <div id="cmd-palette">
       <div id="cmd-search">
@@ -156,7 +172,10 @@
         <button data-m="toc" class="sel">Contents</button><button data-m="files">Files</button>
       </div>
       <nav id="toc"></nav>
-      <div id="filetree" hidden></div>
+      <div id="files-pane" hidden>
+        <div id="projects"></div>
+        <div id="filetree"></div>
+      </div>
     </div>
     <div id="toc-resize" title="Drag to resize sidebar"></div>
     <div class="scroll-thumb" id="thumb-scroller"></div>

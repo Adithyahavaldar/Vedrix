@@ -51,6 +51,30 @@ fn write_file(path: String, contents: String) -> Result<u64, String> {
     mtime_ms(&path)
 }
 
+/// Path to the library sidecar (projects/tags), in the OS app-data dir.
+/// Keyed by file path; never written into the user's documents.
+fn library_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.join("library.json"))
+}
+
+#[tauri::command]
+fn read_library(app: tauri::AppHandle) -> Result<String, String> {
+    let p = library_path(&app)?;
+    match std::fs::read_to_string(&p) {
+        Ok(s) => Ok(s),
+        Err(ref e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+fn write_library(app: tauri::AppHandle, contents: String) -> Result<(), String> {
+    let p = library_path(&app)?;
+    std::fs::write(&p, contents).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn read_file_bytes(path: String) -> Result<tauri::ipc::Response, String> {
     let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
@@ -192,6 +216,8 @@ pub fn run() {
             take_pending_file,
             read_file_bytes,
             write_file,
+            read_library,
+            write_library,
             list_dir_tree,
             open_externally,
             ai_fetch,

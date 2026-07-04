@@ -877,6 +877,68 @@ body.editing #scroller { flex: 1; }
 #sel-bubble button:hover { background: var(--hover); }
 #sel-bubble .tb-mono { font-family: ui-monospace, monospace; font-size: 11px; }
 
+/* ---- Projects: sidebar group ---- */
+#projects { padding: 4px 4px 8px; }
+.proj-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 8px 4px; }
+.proj-head span { font: 700 10.5px 'Hanken Grotesk', sans-serif; letter-spacing: .09em; color: var(--text-muted); }
+.proj-add { width: 22px; height: 22px; border: none; border-radius: 6px; background: transparent; color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.proj-add:hover { background: var(--hover); color: var(--fg); }
+.proj-add svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+.proj-empty { padding: 4px 8px 8px; font-size: 11.5px; color: var(--text-muted); line-height: 1.4; }
+.proj-row { display: flex; align-items: center; gap: 7px; padding: 6px 8px; border-radius: 7px; cursor: pointer; font-size: 12.5px; }
+.proj-row:hover { background: var(--hover); }
+.proj-chevron { font-size: 9px; color: var(--text-muted); transition: transform .12s; display: inline-block; width: 10px; }
+.proj-chevron.open { transform: rotate(90deg); }
+.proj-dot { width: 9px; height: 9px; border-radius: 3px; flex: 0 0 auto; }
+.proj-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.proj-count { font-size: 10.5px; color: var(--text-muted); }
+.proj-docs { border-left: 1.5px solid var(--border); margin: 0 0 4px 15px; padding-left: 4px; }
+.proj-doc { display: flex; align-items: center; gap: 7px; width: 100%; text-align: left; border: none; background: transparent; color: var(--text-muted); font: inherit; font-size: 12px; padding: 4px 8px; border-radius: 6px; cursor: pointer; }
+.proj-doc:hover { background: var(--hover); color: var(--fg); }
+.pd-badge { width: 20px; height: 15px; border-radius: 4px; color: #fff; font: 700 7px 'Geist Mono', monospace; display: flex; align-items: center; justify-content: center; flex: 0 0 auto; }
+.pd-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj-doc-empty { padding: 4px 8px; font-size: 11px; color: var(--text-muted); }
+
+/* ---- Assign / context menu ---- */
+#assign-menu {
+  position: fixed; z-index: 250; min-width: 190px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 11px;
+  box-shadow: 0 20px 44px -16px rgba(0,0,0,.4); padding: 5px; animation: sutra-in .12s ease-out;
+}
+#assign-menu[hidden] { display: none; }
+#assign-menu .am-label { font: 700 9.5px 'Hanken Grotesk'; letter-spacing: .08em; text-transform: uppercase; color: var(--text-muted); padding: 6px 10px 4px; }
+#assign-menu button { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border: none; background: transparent; color: var(--fg); font: inherit; font-size: 13px; padding: 7px 10px; border-radius: 7px; cursor: pointer; }
+#assign-menu button:hover { background: var(--hover); }
+#assign-menu .am-dot { width: 9px; height: 9px; border-radius: 3px; flex: 0 0 auto; }
+#assign-menu .am-check { margin-left: auto; color: var(--accent); }
+#assign-menu .am-plus { width: 9px; text-align: center; color: var(--text-muted); }
+#assign-menu .am-sep { height: 1px; background: var(--border); margin: 4px 6px; }
+
+/* ---- New-project modal ---- */
+#project-overlay { position: fixed; inset: 0; z-index: 245; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.4); }
+#project-overlay[hidden] { display: none; }
+#project-card { width: min(440px, 92vw); background: var(--panel); border: 1px solid var(--border); border-radius: 18px; box-shadow: 0 40px 90px -30px rgba(0,0,0,.6); padding: 22px; animation: sutra-in .14s ease-out; }
+#proj-preview { display: flex; align-items: center; gap: 12px; padding: 6px 4px 18px; }
+#proj-preview-icon { width: 44px; height: 44px; border-radius: 12px; display: flex; align-items: center; justify-content: center; flex: 0 0 auto; }
+#proj-preview-icon svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+#proj-preview-name { font: 700 18px 'Newsreader', serif; color: var(--fg); }
+.proj-field { display: block; margin-bottom: 14px; }
+.proj-field > span { display: block; font-size: 11.5px; font-weight: 600; color: var(--text-muted); margin-bottom: 6px; }
+.proj-field > span em { font-weight: 400; font-style: normal; }
+.proj-field input { width: 100%; font: inherit; font-size: 14px; padding: 9px 11px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg); color: var(--fg); outline: none; }
+.proj-field input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+.proj-swatches, .proj-iconset { display: flex; gap: 8px; flex-wrap: wrap; }
+.proj-sw { width: 28px; height: 28px; border-radius: 8px; border: 2px solid transparent; cursor: pointer; }
+.proj-sw.sel { border-color: var(--fg); box-shadow: 0 0 0 2px var(--panel) inset; }
+.proj-ic { width: 34px; height: 34px; border-radius: 9px; border: 1px solid var(--border); background: var(--bg); color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.proj-ic svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.proj-ic.sel { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.proj-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+.btn-ghost { font: inherit; font-size: 13px; padding: 9px 16px; border: 1px solid var(--border); border-radius: 9px; background: transparent; color: var(--fg); cursor: pointer; }
+.btn-ghost:hover { background: var(--hover); }
+.btn-accent { font: inherit; font-size: 13px; font-weight: 600; padding: 9px 18px; border: none; border-radius: 9px; background: var(--accent); color: var(--accent-fg); cursor: pointer; }
+.btn-accent:hover { filter: brightness(1.06); }
+
 /* ---- Command palette (⌘K) ---- */
 #cmd-overlay {
   position: fixed; inset: 0; z-index: 240;

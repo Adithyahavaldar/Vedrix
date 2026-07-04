@@ -229,6 +229,9 @@ function renderTabStrip() {
     const badgeEl = el.querySelector('.tab-badge');
     badgeEl.textContent = b.label; badgeEl.style.background = b.color;
     if (t.dirty) el.classList.add('dirty');
+    const proj = projectOf(t.path);
+    if (proj) { el.dataset.projectColor = '1'; el.style.setProperty('--proj', proj.color); }
+    el.addEventListener('contextmenu', (e) => { e.preventDefault(); openTabAssignMenu(e, t); });
     el.querySelector('.tab-name').textContent = t.name;
     el.addEventListener('mousedown', (e) => {
       if (e.target.closest('.tab-close')) return;
@@ -352,13 +355,226 @@ let folder = null;          // { root, tree }
 let sideMode = 'toc';
 let sidebarCollapsed = false;
 
+/* ============================================================
+   Projects & grouping (D3) — persisted in a local sidecar
+   (app-data via Rust, or localStorage in browser); keyed by
+   file path, NEVER written into the documents themselves.
+   library = { projects:[{id,name,color,icon}], assign:{path:projId}, tags:{path:[..]} }
+   ============================================================ */
+
+const PROJECT_PALETTE = ['#b5623a', '#4f8a80', '#5a6bb0', '#8a5a80', '#7a8a4a', '#c8912a', '#c05a4a', '#4a7ba6'];
+const PROJECT_ICONS = {
+  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  layers: '<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/>',
+  doc: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/>',
+  book: '<path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M19 3v16"/>',
+  star: '<path d="M12 3l2.6 6 6.4.5-4.9 4.2 1.6 6.3L12 17l-5.7 3 1.6-6.3L3 9.5 9.4 9z"/>',
+  graph: '<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="9" r="2.5"/><circle cx="9" cy="18" r="2.5"/><path d="M8 7.5l8 1M8 16l1-6"/>',
+  flag: '<path d="M5 21V4h11l-2 4 2 4H5"/>',
+  box: '<path d="M3 8l9-5 9 5v8l-9 5-9-5z"/><path d="M3 8l9 5 9-5"/>',
+};
+const PROJECT_ICON_KEYS = Object.keys(PROJECT_ICONS);
+
+let library = { projects: [], assign: {}, tags: {} };
+const projectsOpen = new Set();  // expanded project ids in sidebar
+
+async function loadLibrary() {
+  try {
+    let raw;
+    if (TAURI) raw = await TAURI.core.invoke('read_library');
+    else raw = localStorage.getItem('mv_library') || '';
+    if (raw) library = JSON.parse(raw);
+    library.projects ||= []; library.assign ||= {}; library.tags ||= {};
+  } catch (_) { library = { projects: [], assign: {}, tags: {} }; }
+}
+
+async function saveLibrary() {
+  const raw = JSON.stringify(library);
+  try {
+    if (TAURI) await TAURI.core.invoke('write_library', { contents: raw });
+    else localStorage.setItem('mv_library', raw);
+  } catch (err) { console.error('saveLibrary', err); }
+}
+
+function projectById(id) { return library.projects.find(p => p.id === id) || null; }
+function projectOf(path) { return path ? projectById(library.assign[path]) : null; }
+function docsInProject(id) { return Object.keys(library.assign).filter(p => library.assign[p] === id); }
+
+function projIconSvg(key) { return `<svg viewBox="0 0 24 24">${PROJECT_ICONS[key] || PROJECT_ICONS.folder}</svg>`; }
+
+function createProject({ name, color, icon, desc }) {
+  const id = 'p' + Date.now().toString(36) + Math.floor(performance.now()).toString(36);
+  library.projects.push({ id, name, color, icon, desc: desc || '' });
+  saveLibrary();
+  return id;
+}
+
+function assignToProject(path, projId) {
+  if (!path) return;
+  if (projId) library.assign[path] = projId; else delete library.assign[path];
+  saveLibrary();
+  renderProjects();
+  renderTabStrip();
+}
+
+/* ---- new-project modal ---- */
+const projDraft = { color: PROJECT_PALETTE[0], icon: 'layers', onCreate: null };
+
+function openProjectModal(onCreate) {
+  projDraft.color = PROJECT_PALETTE[0]; projDraft.icon = 'layers'; projDraft.onCreate = onCreate || null;
+  $('proj-name').value = ''; $('proj-desc').value = '';
+  // color swatches
+  const cw = $('proj-colors'); cw.innerHTML = '';
+  PROJECT_PALETTE.forEach(c => {
+    const b = document.createElement('button'); b.className = 'proj-sw'; b.style.background = c;
+    b.classList.toggle('sel', c === projDraft.color);
+    b.addEventListener('click', () => { projDraft.color = c; syncProjPreview(); });
+    cw.appendChild(b);
+  });
+  // icon grid
+  const iw = $('proj-icons'); iw.innerHTML = '';
+  PROJECT_ICON_KEYS.forEach(k => {
+    const b = document.createElement('button'); b.className = 'proj-ic'; b.innerHTML = projIconSvg(k);
+    b.classList.toggle('sel', k === projDraft.icon);
+    b.addEventListener('click', () => { projDraft.icon = k; syncProjPreview(); });
+    iw.appendChild(b);
+  });
+  $('project-overlay').hidden = false;
+  syncProjPreview();
+  setTimeout(() => $('proj-name').focus(), 30);
+}
+
+function syncProjPreview() {
+  $('proj-colors').querySelectorAll('.proj-sw').forEach((b, i) => b.classList.toggle('sel', PROJECT_PALETTE[i] === projDraft.color));
+  $('proj-icons').querySelectorAll('.proj-ic').forEach((b, i) => b.classList.toggle('sel', PROJECT_ICON_KEYS[i] === projDraft.icon));
+  const tile = $('proj-preview-icon');
+  tile.innerHTML = projIconSvg(projDraft.icon);
+  tile.style.background = colorTint(projDraft.color, 0.18);
+  tile.style.color = projDraft.color;
+  $('proj-preview-name').textContent = $('proj-name').value.trim() || 'New project';
+}
+
+function colorTint(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${n >> 16 & 255},${n >> 8 & 255},${n & 255},${a})`;
+}
+
+/* ---- Projects sidebar group ---- */
+function renderProjects() {
+  const host = $('projects');
+  if (!host) return;
+  host.innerHTML = '';
+  const head = document.createElement('div');
+  head.className = 'proj-head';
+  head.innerHTML = `<span>PROJECTS</span><button class="proj-add" title="New project">${svgIcon('plus')}</button>`;
+  head.querySelector('.proj-add').addEventListener('click', () => openProjectModal((id) => { const t = activeTab(); if (t && t.path) assignToProject(t.path, id); }));
+  host.appendChild(head);
+  if (!library.projects.length) {
+    const empty = document.createElement('div');
+    empty.className = 'proj-empty';
+    empty.textContent = 'Group documents into color-coded projects.';
+    host.appendChild(empty);
+    return;
+  }
+  for (const p of library.projects) {
+    const open = projectsOpen.has(p.id);
+    const docs = docsInProject(p.id);
+    const row = document.createElement('div');
+    row.className = 'proj-row';
+    row.innerHTML = `<span class="proj-chevron${open ? ' open' : ''}">▸</span><span class="proj-dot" style="background:${p.color}"></span><span class="proj-name"></span><span class="proj-count">${docs.length}</span>`;
+    row.querySelector('.proj-name').textContent = p.name;
+    row.addEventListener('click', () => { if (open) projectsOpen.delete(p.id); else projectsOpen.add(p.id); renderProjects(); });
+    row.addEventListener('contextmenu', (e) => { e.preventDefault(); openProjectContext(e, p); });
+    host.appendChild(row);
+    if (open) {
+      const list = document.createElement('div'); list.className = 'proj-docs';
+      if (!docs.length) { const d = document.createElement('div'); d.className = 'proj-doc-empty'; d.textContent = 'No documents yet'; list.appendChild(d); }
+      for (const path of docs) {
+        const b = document.createElement('button'); b.className = 'proj-doc';
+        const badge = badgeFor(kindOf(path.split('/').pop()));
+        b.innerHTML = `<span class="pd-badge" style="background:${badge.color}">${badge.label}</span><span class="pd-name"></span>`;
+        b.querySelector('.pd-name').textContent = path.split('/').pop();
+        b.addEventListener('click', () => { if (TAURI) openTauriPath(path); });
+        list.appendChild(b);
+      }
+      host.appendChild(list);
+    }
+  }
+}
+
+function openProjectContext(e, p) {
+  const m = $('assign-menu');
+  m.innerHTML = `<button data-a="rename">Rename…</button><button data-a="delete">Delete project</button>`;
+  m.querySelector('[data-a="rename"]').addEventListener('click', () => {
+    const name = prompt('Rename project', p.name); if (name && name.trim()) { p.name = name.trim(); saveLibrary(); renderProjects(); } m.hidden = true;
+  });
+  m.querySelector('[data-a="delete"]').addEventListener('click', () => {
+    library.projects = library.projects.filter(x => x.id !== p.id);
+    Object.keys(library.assign).forEach(k => { if (library.assign[k] === p.id) delete library.assign[k]; });
+    saveLibrary(); renderProjects(); renderTabStrip(); m.hidden = true;
+  });
+  showMenuAt(m, e.clientX, e.clientY);
+}
+
+/* ---- tab → Add to project (right-click) ---- */
+function openTabAssignMenu(e, t) {
+  if (!t.path) return; // only persisted files can be grouped
+  const m = $('assign-menu');
+  const cur = library.assign[t.path];
+  let html = '<div class="am-label">Add to project</div>';
+  for (const p of library.projects) {
+    html += `<button data-p="${p.id}"><span class="am-dot" style="background:${p.color}"></span>${escapeHtmlText(p.name)}${cur === p.id ? ' <span class="am-check">✓</span>' : ''}</button>`;
+  }
+  html += `<button data-p="__new"><span class="am-plus">+</span> New project…</button>`;
+  if (cur) html += `<div class="am-sep"></div><button data-p="">Remove from project</button>`;
+  m.innerHTML = html;
+  m.querySelectorAll('button[data-p]').forEach(btn => btn.addEventListener('click', () => {
+    const v = btn.dataset.p;
+    m.hidden = true;
+    if (v === '__new') openProjectModal((id) => assignToProject(t.path, id));
+    else assignToProject(t.path, v || null);
+  }));
+  showMenuAt(m, e.clientX, e.clientY);
+}
+
+function escapeHtmlText(s) { const d = document.createElement('span'); d.textContent = s; return d.innerHTML; }
+
+function openTabAssignMenuCentered(t) {
+  openTabAssignMenu({ preventDefault() {}, clientX: window.innerWidth / 2 - 95, clientY: window.innerHeight / 2 - 60 }, t);
+}
+
+function showMenuAt(m, x, y) {
+  m.hidden = false;
+  const mainRect = document.body.getBoundingClientRect();
+  m.style.left = Math.min(x, mainRect.width - m.offsetWidth - 8) + 'px';
+  m.style.top = Math.min(y, mainRect.height - m.offsetHeight - 8) + 'px';
+  const close = (ev) => { if (!ev.target.closest('#assign-menu')) { m.hidden = true; document.removeEventListener('mousedown', close); } };
+  setTimeout(() => document.addEventListener('mousedown', close), 0);
+}
+
+function wireProjectModal() {
+  $('proj-name').addEventListener('input', () => { $('proj-preview-name').textContent = $('proj-name').value.trim() || 'New project'; });
+  $('proj-cancel').addEventListener('click', () => { $('project-overlay').hidden = true; });
+  $('project-overlay').addEventListener('mousedown', (e) => { if (e.target === $('project-overlay')) $('project-overlay').hidden = true; });
+  $('proj-create').addEventListener('click', () => {
+    const name = $('proj-name').value.trim(); if (!name) { $('proj-name').focus(); return; }
+    const id = createProject({ name, color: projDraft.color, icon: projDraft.icon, desc: $('proj-desc').value.trim() });
+    $('project-overlay').hidden = true;
+    projectsOpen.add(id);
+    if (projDraft.onCreate) projDraft.onCreate(id);
+    renderProjects();
+  });
+}
+
+
 function updateSidebar() {
   const hasToc = !tocEl.classList.contains('hidden');
-  const hasFiles = !!folder;
+  const hasFiles = !!folder || library.projects.length > 0;
   $('side-tabs').hidden = !hasFiles;
   const mode = (sideMode === 'files' && hasFiles) ? 'files' : 'toc';
   tocEl.hidden = mode !== 'toc';
-  $('filetree').hidden = mode !== 'files';
+  $('files-pane').hidden = mode !== 'files';
+  $('filetree').hidden = !folder;
   document.querySelectorAll('#side-tabs button').forEach(b => b.classList.toggle('sel', b.dataset.m === mode));
   $('sidebar').classList.toggle('hidden', sidebarCollapsed || (!hasToc && !hasFiles));
 }
@@ -1875,6 +2091,7 @@ const ICON_PATHS = {
   find: '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/>',
   doc: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/>',
   present: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M12 16v4M8 20h8"/>',
+  layers: '<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/>',
 };
 function svgIcon(name, filled) {
   return `<svg viewBox="0 0 24 24">${ICON_PATHS[name] || ''}</svg>`.replace('<svg ', filled ? '<svg data-filled ' : '<svg ');
@@ -1898,6 +2115,8 @@ function cmdActions() {
   if (t) list.push({ id: 'summarize', label: 'Summarize this document', hint: 'AI', icon: 'ai', filled: true, run: () => { closeCmd(); toggleAiPanel(true); if (typeof aiQuick === 'function') aiQuick('summarize'); } });
   if (t) list.push({ id: 'export', label: 'Export…', hint: '', icon: 'export', run: () => { closeCmd(); exportActive('md'); } });
   list.push({ id: 'open-folder', label: 'Open a folder (wiki mode)', hint: '⌘⇧O', icon: 'doc', run: () => { closeCmd(); if (typeof openFolder === 'function') openFolder(); } });
+  list.push({ id: 'new-project', label: 'New project…', hint: '', icon: 'layers', run: () => { closeCmd(); openProjectModal((id) => { const t = activeTab(); if (t && t.path) assignToProject(t.path, id); sideMode = 'files'; updateSidebar(); }); } });
+  if (t && t.path) list.push({ id: 'add-to-project', label: 'Add this document to a project…', hint: '', icon: 'layers', run: () => { closeCmd(); openTabAssignMenuCentered(t); } });
   for (const th of THEMES) list.push({ id: 'theme:' + th.key, label: 'Theme: ' + th.label, hint: '', icon: 'theme', sw: th.sw, run: () => { settings.theme = th.key; saveSettings(); applySettings(); closeCmd(); } });
   return list;
 }
@@ -3485,6 +3704,8 @@ function wireGlobal() {
       $('history-panel').hidden = true;
       $('shortcuts-overlay').hidden = true;
       $('cmd-overlay').hidden = true;
+      $('project-overlay').hidden = true;
+      $('assign-menu').hidden = true;
       if (!$('findbar').hidden) closeFind();
     }
     else if (mod && e.altKey && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {
@@ -3612,11 +3833,14 @@ function wireTauri() {
 
 async function boot() {
   applySettings();
+  await loadLibrary();
   wireSettings();
   wireHistory();
   wireGlobal();
   wireMobile();
   wireTauri();
+  wireProjectModal();
+  renderProjects();
   renderRecents();
   renderActive();
 
