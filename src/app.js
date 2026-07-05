@@ -365,6 +365,7 @@ let sidebarCollapsed = false;
    ============================================================ */
 
 const PROJECT_PALETTE = ['#b5623a', '#4f8a80', '#5a6bb0', '#8a5a80', '#7a8a4a', '#c8912a', '#c05a4a', '#4a7ba6'];
+// Full stroke-icon package for projects (one family, 24×24, 1.6 stroke)
 const PROJECT_ICONS = {
   folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
   layers: '<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/>',
@@ -374,6 +375,25 @@ const PROJECT_ICONS = {
   graph: '<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="9" r="2.5"/><circle cx="9" cy="18" r="2.5"/><path d="M8 7.5l8 1M8 16l1-6"/>',
   flag: '<path d="M5 21V4h11l-2 4 2 4H5"/>',
   box: '<path d="M3 8l9-5 9 5v8l-9 5-9-5z"/><path d="M3 8l9 5 9-5"/>',
+  rocket: '<path d="M5 15c-1 1-1 4-1 4s3 0 4-1M14 4c3-1 6 2 5 5-1 4-6 8-6 8l-4-4s4-5 5-9z"/><circle cx="14.5" cy="9.5" r="1.3"/>',
+  bulb: '<path d="M9 18h6M10 21h4M12 3a6 6 0 0 1 4 10.5c-.6.6-1 1.3-1 2.1H9c0-.8-.4-1.5-1-2.1A6 6 0 0 1 12 3z"/>',
+  target: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="1"/>',
+  code: '<path d="M8 8l-4 4 4 4M16 8l4 4-4 4M14 5l-4 14"/>',
+  brush: '<path d="M4 20c2 1 5-1 5-3l8-9-3-3-9 8c-2 0-4 3-1 7z"/>',
+  camera: '<path d="M4 8h3l2-2h6l2 2h3v11H4z"/><circle cx="12" cy="13" r="3"/>',
+  music: '<path d="M9 18V6l10-2v12"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="16" r="2"/>',
+  heart: '<path d="M12 20s-7-4.5-9-9C1.5 7.5 4 4 7 4c2 0 3.5 1.5 5 3.5C13.5 5.5 15 4 17 4c3 0 5.5 3.5 4 7-2 4.5-9 9-9 9z"/>',
+  chart: '<path d="M4 20V4M4 20h16M8 16v-4M13 16V8M18 16v-7"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/>',
+  bolt: '<path d="M13 3L5 13h6l-1 8 8-10h-6z"/>',
+  calendar: '<rect x="4" y="5" width="16" height="16" rx="2"/><path d="M4 9h16M8 3v4M16 3v4"/>',
+  chat: '<path d="M4 5h16v11H9l-5 4z"/>',
+  tag: '<path d="M4 4h7l9 9-7 7-9-9z"/><circle cx="8.5" cy="8.5" r="1.3"/>',
+  compass: '<circle cx="12" cy="12" r="9"/><path d="M15 9l-2 4-4 2 2-4z"/>',
+  leaf: '<path d="M5 19c8 2 14-4 14-12 0-1 0-2-.5-2.5C10 5 5 10 5 19z"/><path d="M9 15c2-3 5-5 8-6"/>',
+  shield: '<path d="M12 3l7 3v6c0 5-3 7-7 9-4-2-7-4-7-9V6z"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/>',
+  cube: '<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/>',
 };
 const PROJECT_ICON_KEYS = Object.keys(PROJECT_ICONS);
 
@@ -419,12 +439,17 @@ function assignToProject(path, projId) {
   renderTabStrip();
 }
 
-/* ---- new-project modal ---- */
-const projDraft = { color: PROJECT_PALETTE[0], icon: 'layers', onCreate: null };
+/* ---- new/edit-project modal ---- */
+const projDraft = { color: PROJECT_PALETTE[0], icon: 'layers', onCreate: null, editId: null };
 
-function openProjectModal(onCreate) {
-  projDraft.color = PROJECT_PALETTE[0]; projDraft.icon = 'layers'; projDraft.onCreate = onCreate || null;
-  $('proj-name').value = ''; $('proj-desc').value = '';
+function openProjectModal(onCreate, editProject) {
+  projDraft.editId = editProject ? editProject.id : null;
+  projDraft.color = editProject ? editProject.color : PROJECT_PALETTE[0];
+  projDraft.icon = editProject ? editProject.icon : 'layers';
+  projDraft.onCreate = onCreate || null;
+  $('proj-name').value = editProject ? editProject.name : '';
+  $('proj-desc').value = editProject ? (editProject.desc || '') : '';
+  $('proj-create').textContent = editProject ? 'Save changes' : 'Create project';
   // color swatches
   const cw = $('proj-colors'); cw.innerHTML = '';
   PROJECT_PALETTE.forEach(c => {
@@ -433,7 +458,7 @@ function openProjectModal(onCreate) {
     b.addEventListener('click', () => { projDraft.color = c; syncProjPreview(); });
     cw.appendChild(b);
   });
-  // icon grid
+  // icon grid (full package — scrolls)
   const iw = $('proj-icons'); iw.innerHTML = '';
   PROJECT_ICON_KEYS.forEach(k => {
     const b = document.createElement('button'); b.className = 'proj-ic'; b.innerHTML = projIconSvg(k);
@@ -568,9 +593,12 @@ function renderProjects() {
     const docs = docsInProject(p.id);
     const row = document.createElement('div');
     row.className = 'proj-row';
-    row.innerHTML = `<span class="proj-chevron${open ? ' open' : ''}">▸</span><span class="proj-dot" style="background:${p.color}"></span><span class="proj-name"></span><span class="proj-count">${docs.length}</span>`;
+    const tileIcon = `<span class="proj-ic-tile" style="background:${colorTint(p.color, 0.18)};color:${p.color}">${projIconSvg(p.icon)}</span>`;
+    row.innerHTML = `<span class="proj-chevron${open ? ' open' : ''}">▸</span>${tileIcon}<span class="proj-name"></span><button class="proj-rowadd" title="Add a document to this project">＋</button><button class="proj-rowmore" title="Project options">⋯</button><span class="proj-count">${docs.length}</span>`;
     row.querySelector('.proj-name').textContent = p.name;
-    row.addEventListener('click', () => { if (open) projectsOpen.delete(p.id); else projectsOpen.add(p.id); renderProjects(); });
+    row.addEventListener('click', (e) => { if (e.target.closest('button')) return; if (open) projectsOpen.delete(p.id); else projectsOpen.add(p.id); renderProjects(); });
+    row.querySelector('.proj-rowadd').addEventListener('click', (e) => { e.stopPropagation(); openAddDocMenu(e, p); });
+    row.querySelector('.proj-rowmore').addEventListener('click', (e) => { e.stopPropagation(); openProjectContext(e, p); });
     row.addEventListener('contextmenu', (e) => { e.preventDefault(); openProjectContext(e, p); });
     host.appendChild(row);
     if (open) {
@@ -579,26 +607,44 @@ function renderProjects() {
       for (const path of docs) {
         const b = document.createElement('button'); b.className = 'proj-doc';
         const badge = badgeFor(kindOf(path.split('/').pop()));
-        b.innerHTML = `<span class="pd-badge" style="background:${badge.color}">${badge.label}</span><span class="pd-name"></span>`;
+        b.innerHTML = `<span class="pd-badge" style="background:${badge.color}">${badge.label}</span><span class="pd-name"></span><span class="pd-x" title="Remove from project">✕</span>`;
         b.querySelector('.pd-name').textContent = path.split('/').pop();
+        b.querySelector('.pd-x').addEventListener('click', (e) => { e.stopPropagation(); assignToProject(path, null); });
         b.addEventListener('click', () => { if (TAURI) openTauriPath(path); });
         list.appendChild(b);
       }
+      const add = document.createElement('button'); add.className = 'proj-doc proj-doc-add';
+      add.innerHTML = `<span class="pd-plus">＋</span><span>Add a document…</span>`;
+      add.addEventListener('click', (e) => openAddDocMenu(e, p));
+      list.appendChild(add);
       host.appendChild(list);
     }
   }
 }
 
+// small menu: add the current document, or pick a file
+function openAddDocMenu(e, p) {
+  const m = $('assign-menu');
+  const t = activeTab();
+  let html = '<div class="am-label">Add to “' + escapeHtmlText(p.name) + '”</div>';
+  if (t && t.path && library.assign[t.path] !== p.id) html += `<button data-a="current">Add current document<span class="am-sub">${escapeHtmlText(t.name)}</span></button>`;
+  html += `<button data-a="pick"><span class="am-plus">+</span> Choose a file…</button>`;
+  m.innerHTML = html;
+  const cur = m.querySelector('[data-a="current"]');
+  if (cur) cur.addEventListener('click', () => { m.hidden = true; assignToProject(t.path, p.id); projectsOpen.add(p.id); renderProjects(); });
+  m.querySelector('[data-a="pick"]').addEventListener('click', () => { m.hidden = true; addFileToProject(p.id); });
+  showMenuAt(m, e.clientX, e.clientY);
+}
+
 function openProjectContext(e, p) {
   const m = $('assign-menu');
-  m.innerHTML = `<button data-a="rename">Rename…</button><button data-a="delete">Delete project</button>`;
-  m.querySelector('[data-a="rename"]').addEventListener('click', () => {
-    const name = prompt('Rename project', p.name); if (name && name.trim()) { p.name = name.trim(); saveLibrary(); renderProjects(); } m.hidden = true;
-  });
+  m.innerHTML = `<button data-a="add">Add a document…</button><button data-a="edit">Edit project…</button><div class="am-sep"></div><button data-a="delete">Delete project</button>`;
+  m.querySelector('[data-a="add"]').addEventListener('click', (ev) => { m.hidden = true; openAddDocMenu(ev, p); });
+  m.querySelector('[data-a="edit"]').addEventListener('click', () => { m.hidden = true; openProjectModal(null, p); });
   m.querySelector('[data-a="delete"]').addEventListener('click', () => {
     library.projects = library.projects.filter(x => x.id !== p.id);
     Object.keys(library.assign).forEach(k => { if (library.assign[k] === p.id) delete library.assign[k]; });
-    saveLibrary(); renderProjects(); renderTabStrip(); m.hidden = true;
+    saveLibrary(); renderProjects(); renderTabStrip(); if (homeShown) renderHome(); m.hidden = true;
   });
   showMenuAt(m, e.clientX, e.clientY);
 }
@@ -645,12 +691,31 @@ function wireProjectModal() {
   $('project-overlay').addEventListener('mousedown', (e) => { if (e.target === $('project-overlay')) $('project-overlay').hidden = true; });
   $('proj-create').addEventListener('click', () => {
     const name = $('proj-name').value.trim(); if (!name) { $('proj-name').focus(); return; }
+    if (projDraft.editId) {
+      const p = projectById(projDraft.editId);
+      if (p) { p.name = name; p.color = projDraft.color; p.icon = projDraft.icon; p.desc = $('proj-desc').value.trim(); saveLibrary(); }
+      $('project-overlay').hidden = true;
+      renderProjects(); renderTabStrip(); if (homeShown) renderHome();
+      return;
+    }
     const id = createProject({ name, color: projDraft.color, icon: projDraft.icon, desc: $('proj-desc').value.trim() });
     $('project-overlay').hidden = true;
     projectsOpen.add(id);
     if (projDraft.onCreate) projDraft.onCreate(id);
     renderProjects();
+    if (homeShown) renderHome();
   });
+}
+
+// Add a document to a project via the OS picker (works even with no tab open)
+async function addFileToProject(projId) {
+  let path = null;
+  if (TAURI) {
+    const picked = await TAURI.core.invoke('plugin:dialog|open', { options: { multiple: false, directory: false } });
+    path = typeof picked === 'string' ? picked : (picked && picked.path);
+  }
+  if (path) { assignToProject(path, projId); projectsOpen.add(projId); renderProjects(); }
+  else toast('Open a file, then use “Add to project”.');
 }
 
 
@@ -3537,6 +3602,7 @@ function toggleAiPanel(wantOpen) {
   const panel = $('ai-panel');
   panel.hidden = wantOpen === true ? false : (wantOpen === false ? true : !panel.hidden);
   $('ai-btn').classList.toggle('on', !panel.hidden);
+  $('ai-resize').hidden = panel.hidden || mobileMQ.matches; // no resize when full-screen sheet
   if (!panel.hidden) { renderAiChat(); $('ai-input').focus(); }
 }
 
@@ -3972,14 +4038,14 @@ function wireGlobal() {
     }, { passive: true });
   }
 
-  // sidebar resize handle
+  // sidebar resize handle (nav-rail aware: measure from the sidebar's own left)
   const handle = $('toc-resize');
   handle.addEventListener('mousedown', (e) => {
     e.preventDefault();
     handle.classList.add('dragging');
-    const mainLeft = $('main').getBoundingClientRect().left;
+    const sbLeft = $('sidebar').getBoundingClientRect().left;
     const move = (ev) => {
-      const w = Math.min(460, Math.max(160, ev.clientX - mainLeft));
+      const w = Math.min(520, Math.max(180, ev.clientX - sbLeft));
       $('sidebar').style.width = w + 'px';
       settings.tocWidth = w;
     };
@@ -3993,6 +4059,28 @@ function wireGlobal() {
     document.addEventListener('mouseup', up);
   });
   if (settings.tocWidth) $('sidebar').style.width = settings.tocWidth + 'px';
+
+  // AI panel resize handle (right dock: drag its left edge)
+  const aiHandle = $('ai-resize');
+  aiHandle.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    aiHandle.classList.add('dragging');
+    const rightEdge = $('ai-panel').getBoundingClientRect().right;
+    const move = (ev) => {
+      const w = Math.min(640, Math.max(280, rightEdge - ev.clientX));
+      $('ai-panel').style.width = w + 'px';
+      settings.aiWidth = w;
+    };
+    const up = () => {
+      aiHandle.classList.remove('dragging');
+      saveSettings();
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up);
+    };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  });
+  if (settings.aiWidth) $('ai-panel').style.width = settings.aiWidth + 'px';
 
   // browser drag & drop (Tauri intercepts drops natively — see wireTauri)
   if (!TAURI) {

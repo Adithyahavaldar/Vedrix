@@ -11,8 +11,8 @@
 <link rel="stylesheet" href="vendor/fonts/fonts.css">
 <link rel="stylesheet" href="vendor/katex.min.css">
 <link rel="stylesheet" href="vendor/codemirror.css">
-<link rel="stylesheet" href="app.css?v=122">
-<link rel="stylesheet" href="themes.css?v=122">
+<link rel="stylesheet" href="app.css?v=124">
+<link rel="stylesheet" href="themes.css?v=124">
 </head>
 <body>
   <div id="topbar" data-tauri-drag-region>
@@ -65,8 +65,8 @@
   </div>
 
   <div id="edit-toolbar" hidden>
-    <button class="tb" data-cmd="undo" title="Undo (⌘Z)">↶</button>
-    <button class="tb" data-cmd="redo" title="Redo (⇧⌘Z)">↷</button>
+    <button class="tb tb-ic" data-cmd="undo" title="Undo (⌘Z)"><svg viewBox="0 0 24 24"><path d="M9 7L4 12l5 5M4 12h11a5 5 0 0 1 0 10h-1"/></svg></button>
+    <button class="tb tb-ic" data-cmd="redo" title="Redo (⇧⌘Z)"><svg viewBox="0 0 24 24"><path d="M15 7l5 5-5 5M20 12H9a5 5 0 0 0 0 10h1"/></svg></button>
     <span class="tb-sep"></span>
     <select id="tb-block" title="Block type">
       <option value="p">Paragraph</option>
@@ -83,17 +83,17 @@
     <button class="tb" data-cmd="strike" title="Strikethrough"><s>S</s></button>
     <button class="tb tb-mono" data-cmd="code" title="Inline code">&lt;/&gt;</button>
     <button class="tb" data-cmd="highlight" title="Highlight"><mark style="padding:0 3px">H</mark></button>
-    <button class="tb" data-cmd="link" title="Link (⌘K)">🔗</button>
+    <button class="tb tb-ic" data-cmd="link" title="Link (⌘K)"><svg viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 6 .5l3-3a4 4 0 0 0-6-6l-1.5 1.5M14 10a4 4 0 0 0-6-.5l-3 3a4 4 0 0 0 6 6l1.5-1.5"/></svg></button>
     <span class="tb-sep"></span>
-    <button class="tb" data-cmd="ul" title="Bullet list">•</button>
-    <button class="tb" data-cmd="ol" title="Numbered list">1.</button>
-    <button class="tb" data-cmd="task" title="To-do checkbox">☑</button>
+    <button class="tb tb-ic" data-cmd="ul" title="Bullet list"><svg viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1.2" fill="currentColor" stroke="none"/><circle cx="4.5" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="4.5" cy="18" r="1.2" fill="currentColor" stroke="none"/></svg></button>
+    <button class="tb tb-ic" data-cmd="ol" title="Numbered list"><svg viewBox="0 0 24 24"><path d="M10 6h10M10 12h10M10 18h10M4 6V4l-1 .5M3 18h2l-1.5-2H5"/></svg></button>
+    <button class="tb tb-ic" data-cmd="task" title="To-do checkbox"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="7" height="7" rx="1.5"/><path d="M4.5 7.5l1.5 1.5 2.5-3M14 7h6M14 17h6M3 15h7v5H3z"/></svg></button>
     <span class="tb-sep"></span>
-    <button class="tb" data-cmd="hr" title="Divider">─</button>
-    <button class="tb" data-cmd="table" title="Insert table">⊞</button>
-    <button class="tb" data-cmd="image" title="Insert image">🖼</button>
-    <button class="tb" data-cmd="math" title="Math block">∑</button>
-    <button class="tb" data-cmd="mermaid" title="Diagram block">⤳</button>
+    <button class="tb tb-ic" data-cmd="hr" title="Divider"><svg viewBox="0 0 24 24"><path d="M4 12h16"/></svg></button>
+    <button class="tb tb-ic" data-cmd="table" title="Insert table"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M9 4v16"/></svg></button>
+    <button class="tb tb-ic" data-cmd="image" title="Insert image"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.6"/><path d="M4 18l5-5 4 4 3-3 4 4"/></svg></button>
+    <button class="tb tb-ic" data-cmd="math" title="Math block"><svg viewBox="0 0 24 24"><path d="M5 5h9l-5 14M6 12h6"/></svg></button>
+    <button class="tb tb-ic" data-cmd="mermaid" title="Diagram block"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="6" rx="1.5"/><rect x="14" y="15" width="7" height="6" rx="1.5"/><path d="M6.5 9v3a3 3 0 0 0 3 3h8"/></svg></button>
     <span class="spacer"></span>
     <button class="tb" data-cmd="aa" title="Document appearance (font, size, width)">Aa</button>
   </div>
@@ -110,7 +110,7 @@
     <button data-cmd="strike" title="Strikethrough"><s>S</s></button>
     <button data-cmd="code" title="Inline code" class="tb-mono">&lt;/&gt;</button>
     <button data-cmd="highlight" title="Highlight"><mark style="padding:0 3px">H</mark></button>
-    <button data-cmd="link" title="Link (⌘K)">🔗</button>
+    <button data-cmd="link" class="sb-ic" title="Link (⌘K)"><svg viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 6 .5l3-3a4 4 0 0 0-6-6l-1.5 1.5M14 10a4 4 0 0 0-6-.5l-3 3a4 4 0 0 0 6 6l1.5-1.5"/></svg></button>
   </div>
 
   <div id="slash-menu" hidden></div>
@@ -335,6 +335,7 @@
       <button id="pill-done" title="Finish editing (⌘E)">Done</button>
     </div>
 
+    <div id="ai-resize" hidden title="Drag to resize AI panel"></div>
     <aside id="ai-panel" hidden>
       <div id="ai-head">
         <span>✦ Assistant</span>
