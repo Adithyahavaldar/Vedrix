@@ -688,23 +688,49 @@ body.dragover::after {
 }
 #settings-overlay[hidden] { display: none; }
 #settings-card {
-  width: min(560px, 92vw); max-height: 84vh;
-  overflow-y: auto;
+  width: min(720px, 94vw); height: min(560px, 86vh);
+  display: flex; overflow: hidden;
   background: var(--panel);
-  border: 1px solid var(--border); border-radius: 14px;
+  border: 1px solid var(--border); border-radius: 16px;
   box-shadow: 0 20px 60px rgba(0,0,0,.35);
-  padding: 20px 24px 24px;
 }
-#settings-card h2 {
-  margin: 0 0 4px; font-size: 17px;
-  display: flex; align-items: center; justify-content: space-between;
+/* left nav */
+#settings-nav {
+  flex: 0 0 176px; display: flex; flex-direction: column; gap: 2px;
+  padding: 16px 10px; background: var(--bg);
+  border-right: 1px solid var(--border);
 }
-#settings-card h2 .icon-btn { font-size: 16px; }
+.set-nav-title { font: 700 15px 'Hanken Grotesk'; padding: 4px 10px 12px; }
+.set-nav-item {
+  display: flex; align-items: center; gap: 9px;
+  font: inherit; font-size: 13px; text-align: left;
+  padding: 8px 10px; border: none; border-radius: 8px;
+  background: transparent; color: var(--fg); cursor: pointer;
+}
+.set-nav-item svg { width: 16px; height: 16px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.set-nav-item[data-sec="ai"] svg { stroke: none; }
+.set-nav-item:hover { background: var(--hover); }
+.set-nav-item.sel { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); font-weight: 600; }
+.set-nav-spacer { flex: 1; }
+.set-nav-close { color: var(--text-muted); }
+/* right body */
+#settings-body { flex: 1; overflow-y: auto; padding: 26px 28px 28px; }
+.settings-section[hidden] { display: none; }
+.set-h { margin: 0 0 4px; font: 700 18px 'Hanken Grotesk'; letter-spacing: -.01em; }
+.set-sub { margin: 0 0 16px; font-size: 12.5px; color: var(--text-muted); }
 #settings-card h3 {
   margin: 22px 0 10px; font-size: 11px; font-weight: 600;
   text-transform: uppercase; letter-spacing: .06em;
   color: var(--text-muted);
 }
+/* live type preview */
+#type-preview { margin-top: 22px; padding: 18px 20px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); }
+.tp-label { font: 600 10px 'Geist Mono', monospace; text-transform: uppercase; letter-spacing: .08em; color: var(--text-muted); margin-bottom: 10px; }
+#type-preview h4 { margin: 0 0 8px; font-size: calc(var(--reader-fs, 16px) * 1.5); line-height: 1.2; }
+#type-preview p { margin: 0 0 8px; font-size: var(--reader-fs, 16px); line-height: 1.6; color: var(--fg); }
+#type-preview code { font: inherit; font-family: 'Geist Mono', monospace; font-size: calc(var(--reader-fs, 16px) * .9); background: var(--card); padding: 2px 6px; border-radius: 5px; }
+#type-preview.tp-serif h4, #type-preview.tp-serif p { font-family: 'Newsreader', Georgia, serif; }
+#type-preview.tp-mono h4, #type-preview.tp-mono p { font-family: 'Geist Mono', monospace; }
 .seg {
   display: inline-flex;
   border: 1px solid var(--border); border-radius: 8px;
@@ -1369,8 +1395,14 @@ body.mobile .hint-mobile { display: block; }
   #findbar { left: 8px; right: 8px; top: 8px; }
   #find-input { width: 100%; flex: 1; font-size: 16px; }
 
-  /* modals use more of the screen */
-  #settings-card { width: 94vw; max-height: 88vh; padding: 16px 16px 20px; }
+  /* modals use more of the screen — settings nav stacks on top as a scroll row */
+  #settings-card { width: 94vw; height: auto; max-height: 88vh; flex-direction: column; }
+  #settings-nav { flex: 0 0 auto; flex-direction: row; flex-wrap: nowrap; overflow-x: auto; gap: 4px; padding: 10px; border-right: none; border-bottom: 1px solid var(--border); }
+  .set-nav-title { display: none; }
+  .set-nav-item { white-space: nowrap; padding: 7px 11px; }
+  .set-nav-item span, .set-nav-close { display: inline-flex; }
+  .set-nav-spacer { display: none; }
+  #settings-body { padding: 18px 16px 22px; }
   .setting-row { flex-wrap: wrap; }
   .setting-row input[type="text"],
   .setting-row input[type="password"],

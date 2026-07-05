@@ -11,8 +11,8 @@
 <link rel="stylesheet" href="vendor/fonts/fonts.css">
 <link rel="stylesheet" href="vendor/katex.min.css">
 <link rel="stylesheet" href="vendor/codemirror.css">
-<link rel="stylesheet" href="app.css?v=125">
-<link rel="stylesheet" href="themes.css?v=125">
+<link rel="stylesheet" href="app.css?v=126">
+<link rel="stylesheet" href="themes.css?v=126">
 </head>
 <body>
   <div id="topbar" data-tauri-drag-region>
@@ -367,75 +367,105 @@
 
   <div id="settings-overlay" hidden>
     <div id="settings-card">
-      <h2>Settings <button id="settings-close" class="icon-btn" title="Close (Esc)">✕</button></h2>
+      <nav id="settings-nav">
+        <div class="set-nav-title">Settings</div>
+        <button class="set-nav-item sel" data-sec="appearance"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 0 0 16 3 3 0 0 0 0-6 2 2 0 0 1 0-4 4 4 0 0 0-0-6z"/></svg> Appearance</button>
+        <button class="set-nav-item" data-sec="reading"><svg viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M19 3v16"/></svg> Reading</button>
+        <button class="set-nav-item" data-sec="ai"><svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 2l1.9 6.1L20 10l-6.1 1.9L12 18l-1.9-6.1L4 10l6.1-1.9z"/></svg> AI assistant</button>
+        <button class="set-nav-item" data-sec="behavior"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M6 6l2 2M16 16l2 2M18 6l-2 2M8 16l-2 2"/></svg> Behavior</button>
+        <button class="set-nav-item" data-sec="profile"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/></svg> Profile</button>
+        <span class="set-nav-spacer"></span>
+        <button id="settings-close" class="set-nav-item set-nav-close" title="Close (Esc)"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg> Close</button>
+      </nav>
+      <div id="settings-body">
 
-      <h3>Theme</h3>
-      <div id="theme-grid"></div>
+        <section class="settings-section" data-sec="appearance">
+          <h3 class="set-h">Theme</h3>
+          <p class="set-sub">Applies across the reader, editor, and every panel.</p>
+          <div id="theme-grid"></div>
+        </section>
 
-      <h3>Reading</h3>
-      <div class="setting-row">
-        <label>Content width</label>
-        <span class="seg" id="seg-width">
-          <button data-v="narrow">Narrow</button><button data-v="normal">Normal</button><button data-v="wide">Wide</button><button data-v="full">Full</button>
-        </span>
-      </div>
-      <div class="setting-row">
-        <label>Font</label>
-        <span class="seg" id="seg-font">
-          <button data-v="system">System</button><button data-v="serif">Serif</button><button data-v="mono">Mono</button>
-        </span>
-      </div>
-      <div class="setting-row">
-        <label>Font size</label>
-        <span class="stepper">
-          <button id="fs-minus">−</button><span class="val" id="fs-val">16px</span><button id="fs-plus">+</button>
-        </span>
-      </div>
+        <section class="settings-section" data-sec="reading" hidden>
+          <h3 class="set-h">Reading</h3>
+          <div class="setting-row">
+            <label>Content width</label>
+            <span class="seg" id="seg-width">
+              <button data-v="narrow">Narrow</button><button data-v="normal">Normal</button><button data-v="wide">Wide</button><button data-v="full">Full</button>
+            </span>
+          </div>
+          <div class="setting-row">
+            <label>Font</label>
+            <span class="seg" id="seg-font">
+              <button data-v="system">System</button><button data-v="serif">Serif</button><button data-v="mono">Mono</button>
+            </span>
+          </div>
+          <div class="setting-row">
+            <label>Font size</label>
+            <span class="stepper">
+              <button id="fs-minus">−</button><span class="val" id="fs-val">16px</span><button id="fs-plus">+</button>
+            </span>
+          </div>
+          <div id="type-preview">
+            <div class="tp-label">Preview</div>
+            <h4 id="tp-h">The quiet craft of reading</h4>
+            <p id="tp-p">Good typography disappears — it carries the words without asking to be noticed. Adjust the size and family above and watch this sample settle into place.</p>
+            <p id="tp-code"><code>const words = document.read();</code></p>
+          </div>
+        </section>
 
-      <h3>Profile</h3>
-      <div class="setting-row">
-        <label>Display name</label>
-        <input type="text" id="profile-name" placeholder="Your name" spellcheck="false">
-      </div>
+        <section class="settings-section" data-sec="ai" hidden>
+          <h3 class="set-h">AI assistant</h3>
+          <div class="setting-row">
+            <label>Provider</label>
+            <select id="ai-preset">
+              <option value="anthropic">Anthropic (Claude)</option>
+              <option value="openai">OpenAI (GPT)</option>
+              <option value="google">Google (Gemini)</option>
+              <option value="openrouter">OpenRouter (any model)</option>
+              <option value="groq">Groq</option>
+              <option value="deepseek">DeepSeek</option>
+              <option value="mistral">Mistral</option>
+              <option value="ollama">Ollama (local)</option>
+              <option value="lmstudio">LM Studio (local)</option>
+              <option value="custom">Custom…</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <label>API base URL</label>
+            <input type="text" id="ai-base" placeholder="https://api.example.com/v1" spellcheck="false" autocomplete="off">
+          </div>
+          <div class="setting-row">
+            <label>Model</label>
+            <input type="text" id="ai-model" placeholder="model name, e.g. claude-opus-4-8 / gpt-4o / llama3.1" spellcheck="false" autocomplete="off">
+          </div>
+          <div class="setting-row">
+            <label>API key</label>
+            <input type="password" id="ai-key" placeholder="sk-…  (blank for local models)" spellcheck="false" autocomplete="off">
+          </div>
+          <p class="setting-note" id="ai-note">Stored only on this Mac. Works with any Claude, OpenAI-compatible, or local (Ollama / LM Studio) endpoint. Used for Summarize, Chat, Translate, and Concept maps.</p>
+        </section>
 
-      <h3>AI assistant</h3>
-      <div class="setting-row">
-        <label>Provider</label>
-        <select id="ai-preset">
-          <option value="anthropic">Anthropic (Claude)</option>
-          <option value="openai">OpenAI (GPT)</option>
-          <option value="google">Google (Gemini)</option>
-          <option value="openrouter">OpenRouter (any model)</option>
-          <option value="groq">Groq</option>
-          <option value="deepseek">DeepSeek</option>
-          <option value="mistral">Mistral</option>
-          <option value="ollama">Ollama (local)</option>
-          <option value="lmstudio">LM Studio (local)</option>
-          <option value="custom">Custom…</option>
-        </select>
-      </div>
-      <div class="setting-row">
-        <label>API base URL</label>
-        <input type="text" id="ai-base" placeholder="https://api.example.com/v1" spellcheck="false" autocomplete="off">
-      </div>
-      <div class="setting-row">
-        <label>Model</label>
-        <input type="text" id="ai-model" placeholder="model name, e.g. claude-opus-4-8 / gpt-4o / llama3.1" spellcheck="false" autocomplete="off">
-      </div>
-      <div class="setting-row">
-        <label>API key</label>
-        <input type="password" id="ai-key" placeholder="sk-…  (blank for local models)" spellcheck="false" autocomplete="off">
-      </div>
-      <p class="setting-note" id="ai-note">Stored only on this Mac. Works with any Claude, OpenAI-compatible, or local (Ollama / LM Studio) endpoint. Used for Summarize, Chat, Translate, and Concept maps.</p>
+        <section class="settings-section" data-sec="behavior" hidden>
+          <h3 class="set-h">Behavior</h3>
+          <div class="setting-row">
+            <label>Reopen last session's tabs on launch</label>
+            <input type="checkbox" id="restore-session">
+          </div>
+          <div class="setting-row">
+            <label>History of opened files</label>
+            <button id="clear-history" class="danger-btn">Clear history</button>
+          </div>
+        </section>
 
-      <h3>Behavior</h3>
-      <div class="setting-row">
-        <label>Reopen last session's tabs on launch</label>
-        <input type="checkbox" id="restore-session">
-      </div>
-      <div class="setting-row">
-        <label>History of opened files</label>
-        <button id="clear-history" class="danger-btn">Clear history</button>
+        <section class="settings-section" data-sec="profile" hidden>
+          <h3 class="set-h">Profile</h3>
+          <div class="setting-row">
+            <label>Display name</label>
+            <input type="text" id="profile-name" placeholder="Your name" spellcheck="false">
+          </div>
+          <p class="setting-note">Shown on the welcome screen. Stored only on this device.</p>
+        </section>
+
       </div>
     </div>
   </div>
@@ -489,6 +519,6 @@
   window.pdfjsLib = pdfjsLib;
   window.dispatchEvent(new Event('pdfjs-ready'));
 </script>
-<script src="app.js?v=114"></script>
+<script src="app.js?v=126"></script>
 </body>
 </html>

@@ -3806,7 +3806,22 @@ function renderSettingsUI() {
   $('profile-name').value = settings.profileName;
   $('restore-session').checked = settings.restoreSession;
   renderAiSettings();
+  syncTypePreview();
   $('empty-title').textContent = settings.profileName ? `Welcome back, ${settings.profileName}` : 'Sutra';
+}
+
+// Live type sample in the Reading section — reflects font family + size instantly
+function syncTypePreview() {
+  const tp = $('type-preview'); if (!tp) return;
+  tp.style.setProperty('--reader-fs', settings.fontSize + 'px');
+  tp.classList.toggle('tp-serif', settings.font === 'serif');
+  tp.classList.toggle('tp-mono', settings.font === 'mono');
+}
+
+// Switch which settings section is visible
+function showSettingsSection(sec) {
+  document.querySelectorAll('#settings-nav .set-nav-item[data-sec]').forEach(b => b.classList.toggle('sel', b.dataset.sec === sec));
+  document.querySelectorAll('.settings-section').forEach(s => { s.hidden = s.dataset.sec !== sec; });
 }
 
 function renderAiSettings() {
@@ -3824,12 +3839,14 @@ function wireSettings() {
   $('settings-btn').addEventListener('click', () => { $('settings-overlay').hidden = false; });
   $('settings-close').addEventListener('click', () => { $('settings-overlay').hidden = true; });
   $('settings-overlay').addEventListener('mousedown', (e) => { if (e.target === e.currentTarget) $('settings-overlay').hidden = true; });
+  document.querySelectorAll('#settings-nav .set-nav-item[data-sec]').forEach(b =>
+    b.addEventListener('click', () => showSettingsSection(b.dataset.sec)));
   document.querySelectorAll('#seg-width button').forEach(b =>
-    b.addEventListener('click', () => { settings.width = b.dataset.v; saveSettings(); applySettings(); }));
+    b.addEventListener('click', () => { settings.width = b.dataset.v; saveSettings(); applySettings(); syncTypePreview(); }));
   document.querySelectorAll('#seg-font button').forEach(b =>
-    b.addEventListener('click', () => { settings.font = b.dataset.v; saveSettings(); applySettings(); }));
-  $('fs-minus').addEventListener('click', () => { settings.fontSize = Math.max(12, settings.fontSize - 1); saveSettings(); applySettings(); });
-  $('fs-plus').addEventListener('click', () => { settings.fontSize = Math.min(24, settings.fontSize + 1); saveSettings(); applySettings(); });
+    b.addEventListener('click', () => { settings.font = b.dataset.v; saveSettings(); applySettings(); syncTypePreview(); }));
+  $('fs-minus').addEventListener('click', () => { settings.fontSize = Math.max(12, settings.fontSize - 1); saveSettings(); applySettings(); renderSettingsUI(); });
+  $('fs-plus').addEventListener('click', () => { settings.fontSize = Math.min(24, settings.fontSize + 1); saveSettings(); applySettings(); renderSettingsUI(); });
   $('profile-name').addEventListener('change', (e) => { settings.profileName = e.target.value.trim(); saveSettings(); renderSettingsUI(); });
   $('ai-preset').addEventListener('change', (e) => {
     const p = e.target.value;
