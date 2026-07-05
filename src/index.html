@@ -11,8 +11,8 @@
 <link rel="stylesheet" href="vendor/fonts/fonts.css">
 <link rel="stylesheet" href="vendor/katex.min.css">
 <link rel="stylesheet" href="vendor/codemirror.css">
-<link rel="stylesheet" href="app.css?v=124">
-<link rel="stylesheet" href="themes.css?v=124">
+<link rel="stylesheet" href="app.css?v=125">
+<link rel="stylesheet" href="themes.css?v=125">
 </head>
 <body>
   <div id="topbar" data-tauri-drag-region>
@@ -338,17 +338,21 @@
     <div id="ai-resize" hidden title="Drag to resize AI panel"></div>
     <aside id="ai-panel" hidden>
       <div id="ai-head">
-        <span>✦ Assistant</span>
+        <span class="ai-head-tile"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.9 6.1L20 10l-6.1 1.9L12 18l-1.9-6.1L4 10l6.1-1.9z"/></svg></span>
+        <span class="ai-head-title">Sutra AI</span>
+        <span class="ai-head-ctx">on this doc</span>
         <span class="spacer"></span>
-        <button class="icon-btn" id="ai-summarize" title="Summarize the open document">Summarize</button>
-        <button class="icon-btn" id="ai-translate" title="Translate the open document">Translate</button>
-        <button class="icon-btn" id="ai-conceptmap" title="Generate an AI concept map of the open document">Concept map</button>
         <button class="icon-btn" id="ai-close" title="Close (⌘J)">✕</button>
       </div>
       <div id="ai-messages"></div>
+      <div id="ai-chips">
+        <button class="ai-chip" id="ai-summarize">Summarize</button>
+        <button class="ai-chip" id="ai-translate">Translate</button>
+        <button class="ai-chip" id="ai-conceptmap">Concept map</button>
+      </div>
       <div id="ai-input-row">
-        <textarea id="ai-input" rows="2" placeholder="Ask about this document…"></textarea>
-        <button id="ai-send" class="icon-btn" title="Send (Enter)">➤</button>
+        <textarea id="ai-input" rows="1" placeholder="Ask about this document…"></textarea>
+        <button id="ai-send" title="Send (Enter)"><svg viewBox="0 0 24 24"><path d="M12 20V5M6 11l6-6 6 6"/></svg></button>
       </div>
     </aside>
   </div>

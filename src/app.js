@@ -3505,16 +3505,47 @@ function aiMsgEl(role, content) {
   const div = document.createElement('div');
   div.className = 'ai-msg ' + role;
   if (role === 'assistant') {
+    const label = document.createElement('div');
+    label.className = 'ai-label';
+    label.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 2l1.9 6.1L20 10l-6.1 1.9L12 18l-1.9-6.1L4 10l6.1-1.9z"/></svg> Sutra';
+    div.appendChild(label);
     const inner = document.createElement('div');
     inner.className = 'markdown-body';
     inner.innerHTML = DOMPurify.sanitize(md.render(content));
     div.appendChild(inner);
+    // Insert-as-note / Copy actions on completed replies
+    const actions = document.createElement('div');
+    actions.className = 'ai-actions';
+    const insert = document.createElement('button'); insert.textContent = 'Insert as note';
+    insert.addEventListener('click', () => aiInsertAsNote(content));
+    const copy = document.createElement('button'); copy.textContent = 'Copy';
+    copy.addEventListener('click', () => { navigator.clipboard.writeText(content).then(() => toast('Copied')); });
+    actions.append(insert, copy);
+    div.appendChild(actions);
   } else {
     div.textContent = content;
   }
   $('ai-messages').appendChild(div);
   $('ai-messages').scrollTop = $('ai-messages').scrollHeight;
   return div;
+}
+
+// Insert an AI reply as a callout note into the current markdown document
+function aiInsertAsNote(content) {
+  const t = activeTab();
+  if (!t || !(t.kind === 'md' || t.kind === 'text')) { toast('Open a markdown doc to insert notes'); return; }
+  if (!t.editing) toggleEdit();
+  setTimeout(() => {
+    if (!isRichEditing()) return;
+    const bq = document.createElement('blockquote');
+    bq.className = 'callout'; bq.dataset.callout = 'note';
+    const head = document.createElement('div'); head.className = 'callout-head'; head.contentEditable = 'false';
+    head.textContent = '📝 Note'; bq.appendChild(head);
+    const body = document.createElement('div'); body.innerHTML = DOMPurify.sanitize(md.render(content)); bq.appendChild(body);
+    execEditorCmd(() => insertBlockAfterCurrent(bq));
+    onRichInput();
+    toast('Inserted as a note');
+  }, t.editing ? 0 : 350);
 }
 
 function renderAiChat() {

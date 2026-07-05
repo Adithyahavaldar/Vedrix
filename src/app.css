@@ -550,40 +550,58 @@ body.dragover::after {
 #ai-resize[hidden] { display: none; }
 #ai-resize:hover, #ai-resize.dragging { background: color-mix(in srgb, var(--accent) 45%, transparent); }
 #ai-head {
-  display: flex; align-items: center; gap: 4px;
-  padding: 10px 10px 8px;
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 12px 11px;
   border-bottom: 1px solid var(--border);
-  font-size: 13px; font-weight: 600;
 }
-#ai-head .icon-btn { font-size: 11.5px; }
+.ai-head-tile { width: 26px; height: 26px; border-radius: 8px; background: var(--accent); color: var(--accent-fg); display: flex; align-items: center; justify-content: center; flex: 0 0 auto; }
+.ai-head-tile svg { width: 15px; height: 15px; }
+.ai-head-title { font-weight: 700; font-size: 14px; }
+.ai-head-ctx { font: 500 10.5px 'Geist Mono', monospace; color: var(--text-muted); }
+#ai-head .icon-btn { min-width: 28px; height: 28px; }
 #ai-messages {
   flex: 1;
   overflow-y: auto;
-  padding: 12px;
-  display: flex; flex-direction: column; gap: 10px;
+  padding: 14px 12px;
+  display: flex; flex-direction: column; gap: 12px;
 }
-.ai-msg { font-size: 13px; line-height: 1.5; border-radius: 10px; padding: 8px 11px; max-width: 100%; overflow-wrap: break-word; }
-.ai-msg.user { background: color-mix(in srgb, var(--accent) 14%, transparent); align-self: flex-end; max-width: 90%; }
-.ai-msg.assistant { background: var(--bg); border: 1px solid var(--border); }
+.ai-msg { font-size: 13px; line-height: 1.55; max-width: 100%; overflow-wrap: break-word; }
+.ai-msg.user { background: var(--hover); align-self: flex-end; max-width: 88%; border-radius: 13px 13px 3px 13px; padding: 9px 12px; }
+.ai-msg.assistant { align-self: flex-start; max-width: 96%; }
+.ai-msg.assistant .ai-label { display: flex; align-items: center; gap: 5px; font: 700 11px 'Hanken Grotesk'; color: var(--accent); margin-bottom: 5px; }
+.ai-msg.assistant .ai-label svg { width: 12px; height: 12px; fill: var(--accent); }
 .ai-msg.assistant .markdown-body { padding: 0; font-size: 13px; background: transparent; }
+.ai-msg .ai-actions { display: flex; gap: 6px; margin-top: 8px; }
+.ai-msg .ai-actions button { font: inherit; font-size: 11px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 7px; background: transparent; color: var(--text-muted); cursor: pointer; }
+.ai-msg .ai-actions button:hover { border-color: var(--accent); color: var(--accent); }
 .ai-msg.info { color: var(--text-muted); font-size: 12px; background: transparent; padding: 2px 4px; }
+.ai-msg .ai-caret { display: inline-block; width: 2px; height: 1em; background: var(--accent); vertical-align: text-bottom; animation: ai-blink 1s steps(1) infinite; }
+@keyframes ai-blink { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0; } }
 .ai-msg.busy::after { content: "…"; animation: ai-pulse 1s infinite; }
 @keyframes ai-pulse { 50% { opacity: .3; } }
+#ai-chips { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 12px 8px; }
+.ai-chip { font: inherit; font-size: 11.5px; padding: 6px 12px; border: 1px solid var(--border); border-radius: 20px; background: var(--bg); color: var(--fg); cursor: pointer; }
+.ai-chip:hover { border-color: var(--accent); color: var(--accent); }
 #ai-input-row {
-  display: flex; gap: 6px; align-items: flex-end;
-  padding: 10px;
-  border-top: 1px solid var(--border);
+  display: flex; gap: 8px; align-items: center;
+  padding: 10px 12px 12px;
 }
 #ai-input {
   flex: 1;
   font: inherit; font-size: 13px;
-  padding: 7px 10px;
-  border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px 14px;
+  border: 1px solid var(--border); border-radius: 20px;
   background: var(--bg); color: var(--fg);
-  resize: none;
-  outline: none;
+  resize: none; outline: none; max-height: 120px; line-height: 1.4;
 }
-#ai-input:focus { border-color: var(--accent); }
+#ai-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+#ai-send {
+  flex: 0 0 auto; width: 36px; height: 36px; border: none; border-radius: 50%;
+  background: var(--accent); color: var(--accent-fg); cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+#ai-send:hover { filter: brightness(1.06); }
+#ai-send svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .setting-note { font-size: 11.5px; color: var(--text-muted); margin: 2px 0 0; }
 #settings-card input[type="password"] {
   font: inherit; font-size: 13px;
