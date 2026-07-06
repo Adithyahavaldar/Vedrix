@@ -3008,11 +3008,39 @@ function htmlToMarkdown(html) {
 }
 
 // WKWebView silently ignores window.print(); route through the native panel.
-function appPrint() {
+// Also make the OUTPUT print-worthy: swap to a readable theme while the
+// panel is open (dark themes print as pale-gray-on-white otherwise), give
+// the print job a clean filename, and honor the chosen page size.
+function appPrint(opts = {}) {
+  const want = opts.theme || 'light';                 // 'light' | 'dark' | 'current'
+  const t = activeTab();
+  const prevTitle = document.title;
+  if (t) document.title = stem(t.name);               // → suggested PDF filename
+  // page size
+  let ps = document.getElementById('print-page-style');
+  if (!ps) { ps = document.createElement('style'); ps.id = 'print-page-style'; document.head.appendChild(ps); }
+  ps.textContent = `@page { size: ${opts.page === 'letter' ? 'letter' : 'A4'}; margin: 14mm; }`;
+  // theme swap (only when the effective base differs from the request)
+  const cur = THEMES.find(th => th.key === settings.theme) || THEMES[0];
+  const curBase = cur.base === 'system' ? (sysDark.matches ? 'dark' : 'light') : cur.base;
+  let prevTheme = null;
+  if (want !== 'current' && want !== curBase) {
+    prevTheme = settings.theme;
+    settings.theme = want === 'dark' ? 'github-dark' : 'github-light';
+    applySettings();
+  }
+  // restore once the print panel closes and the window regains focus
+  const restore = () => {
+    document.title = prevTitle;
+    if (prevTheme) { settings.theme = prevTheme; applySettings(); }
+  };
+  window.addEventListener('focus', restore, { once: true });
   if (TAURI) {
-    TAURI.core.invoke('print_page').catch((e) => toast('Printing unavailable: ' + e));
+    TAURI.core.invoke('print_page').catch((e) => { toast('Printing unavailable: ' + e); restore(); });
   } else {
     window.print();
+    restore();
+    window.removeEventListener('focus', restore);
   }
 }
 
@@ -3197,8 +3225,10 @@ function wireExportDialog() {
   }));
   $('export-go').addEventListener('click', () => {
     const fmt = exportState.fmt;
+    const theme = document.querySelector('#exp-theme .sel')?.dataset.v || 'light';
+    const page = document.querySelector('#exp-page .sel')?.dataset.v || 'a4';
     $('export-overlay').hidden = true;
-    if (fmt === 'pdf') appPrint();
+    if (fmt === 'pdf') appPrint({ theme, page });
     else exportActive(fmt);
   });
 }

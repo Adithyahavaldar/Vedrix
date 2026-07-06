@@ -1363,9 +1363,15 @@ body.rich-editing #scroller { box-shadow: inset 0 0 0 2px color-mix(in srgb, var
 .markdown-body .mermaid svg { max-width: 100%; }
 
 @media print {
+  /* nothing but the document goes to paper */
   #topbar, #toc, #toc-resize, #history-panel, #settings-overlay, #findbar,
-  #zoom-pill, #shortcuts-overlay, #editor-pane, .scroll-thumb { display: none !important; }
+  #zoom-pill, #shortcuts-overlay, #editor-pane, .scroll-thumb,
+  #nav-rail, #context-bar, #sidebar, #side-tabs, #ai-panel, #ai-resize,
+  #edit-toolbar, #edit-pill, #mv-toast, #export-overlay, #project-overlay,
+  #lang-overlay, #cmd-overlay, #assign-menu, #overflow-menu, #sel-bubble,
+  #slash-menu, #link-pop, #drawer-backdrop, #table-tools { display: none !important; }
   html, body, #main, #scroller { display: block !important; height: auto !important; overflow: visible !important; }
+  body { background: #fff !important; }
   .markdown-body { max-width: 100% !important; padding: 0 !important; }
 }
 

@@ -11,8 +11,8 @@
 <link rel="stylesheet" href="vendor/fonts/fonts.css">
 <link rel="stylesheet" href="vendor/katex.min.css">
 <link rel="stylesheet" href="vendor/codemirror.css">
-<link rel="stylesheet" href="app.css?v=132">
-<link rel="stylesheet" href="themes.css?v=132">
+<link rel="stylesheet" href="app.css?v=133">
+<link rel="stylesheet" href="themes.css?v=133">
 </head>
 <body>
   <div id="topbar" data-tauri-drag-region>
@@ -158,14 +158,12 @@
         <div id="export-options">
           <div class="exp-opt-group" id="exp-theme-group">
             <label>Theme</label>
-            <span class="seg" id="exp-theme"><button data-v="current" class="sel">Current</button><button data-v="light">Light</button><button data-v="dark">Dark</button></span>
+            <span class="seg" id="exp-theme"><button data-v="light" class="sel">Light</button><button data-v="dark">Dark</button><button data-v="current">Current</button></span>
           </div>
           <div class="exp-opt-group" id="exp-page-group">
             <label>Page size</label>
             <span class="seg" id="exp-page"><button data-v="a4" class="sel">A4</button><button data-v="letter">Letter</button></span>
           </div>
-          <label class="exp-check"><input type="checkbox" id="exp-toc" checked> Include table of contents</label>
-          <label class="exp-check"><input type="checkbox" id="exp-nums"> Page numbers</label>
           <div class="exp-note" id="exp-note"></div>
         </div>
         <div id="export-preview"><div id="export-preview-inner"></div></div>
@@ -528,6 +526,6 @@
   window.pdfjsLib = pdfjsLib;
   window.dispatchEvent(new Event('pdfjs-ready'));
 </script>
-<script src="app.js?v=132"></script>
+<script src="app.js?v=133"></script>
 </body>
 </html>
