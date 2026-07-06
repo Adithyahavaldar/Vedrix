@@ -11,8 +11,8 @@
 <link rel="stylesheet" href="vendor/fonts/fonts.css">
 <link rel="stylesheet" href="vendor/katex.min.css">
 <link rel="stylesheet" href="vendor/codemirror.css">
-<link rel="stylesheet" href="app.css?v=128">
-<link rel="stylesheet" href="themes.css?v=128">
+<link rel="stylesheet" href="app.css?v=129">
+<link rel="stylesheet" href="themes.css?v=129">
 </head>
 <body>
   <div id="topbar" data-tauri-drag-region>
@@ -302,12 +302,14 @@
     </div>
 
     <div id="empty">
-      <div class="big">📄</div>
+      <div class="empty-mark">S</div>
       <h2 id="empty-title">Sutra</h2>
-      <p class="hint-desktop"><strong>Drop a file anywhere</strong> — Markdown, PDF, Word, PowerPoint, Excel, text</p>
-      <p class="hint-desktop">or press <kbd>⌘O</kbd> to open one</p>
-      <p class="hint-mobile">Markdown, PDF, Word, PowerPoint, Excel &amp; text</p>
-      <p class="hint-mobile">Tap <strong>＋</strong> above to open a file</p>
+      <p class="empty-sub">One quiet home for everything you read — Markdown, PDF, Word, PowerPoint, Excel &amp; text.</p>
+      <div class="empty-actions">
+        <button id="empty-open" class="btn-accent">Open a file</button>
+        <button id="empty-sample" class="btn-ghost">Try the sample doc</button>
+      </div>
+      <p class="empty-drop hint-desktop">…or drop a file anywhere</p>
       <div id="empty-recents"></div>
     </div>
 
@@ -522,6 +524,6 @@
   window.pdfjsLib = pdfjsLib;
   window.dispatchEvent(new Event('pdfjs-ready'));
 </script>
-<script src="app.js?v=128"></script>
+<script src="app.js?v=129"></script>
 </body>
 </html>

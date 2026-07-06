@@ -104,8 +104,9 @@ Post-fix inventory: **0 duplicate glyphs** across topbar / nav rail / context ba
 **Phase 1 — Touch & safety (critical path, do first)** ✅ **DONE 2026-07-06**
 C1 touch-visible project controls (always-visible, 34px on mobile) · C2 `prompt()` → in-app language dialog with chips · C3 undo-toast for Delete project & Clear history · H1 platform-aware copy (⌘K badge hidden on mobile, "this device") · H2 AI setup card + actionable error buttons deep-linking to Settings→AI · H3 context-bar mobile layout (meta hidden, no collision).
 
-**Phase 2 — First impressions & correctness**
-H4 first-run screen · H5 live breakpoint switching · H7 strikethrough · M1 touch-target pass · M2 `input`-event saves · M4 empty-state actions.
+**Phase 2 — First impressions & correctness** ✅ **DONE 2026-07-06**
+H4 first-run screen (brand tile, Open-a-file + Try-the-sample buttons, drop hint) · H5 re-verified: `applyMobile` + MQ change listener are correct; the earlier stuck-mode repro was a preview-tool artifact · H7 root-caused: turndown-gfm emits single-tilde `~text~` that markdown-it can't parse — edit round-trips silently un-struck text; fixed with a `~~` rule override · M1 touch targets (tab close 18→28px, findbar 24→38px, stepper 26→38px, seg/swatches bumped) · M2 settings text inputs save on `input` (closing the modal can no longer discard an API key) · M4 History and Home empty states got "Open a file" actions.
+**Bonus finding while testing:** phantom toolbar buttons on cold start — `.icon-btn { display:flex }` was overriding the `hidden` attribute (visible in every cold-start screenshot; pre-existing). Fixed globally with `[hidden] { display:none !important }`.
 
 **Phase 3 — Quality & a11y**
 H6 aria-labels + focus-visible + modal focus management · M5/M8 surface silent failures · M7 scroll restore · M3 interaction consistency · L1–L4 polish.

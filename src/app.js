@@ -172,7 +172,14 @@ function renderRecents() {
   const list = $('history-list');
   list.innerHTML = '';
   if (!recents.length) {
-    list.innerHTML = '<div class="none">No files opened yet</div>';
+    const none = document.createElement('div');
+    none.className = 'none';
+    none.textContent = 'No files opened yet';
+    const b = document.createElement('button');
+    b.className = 'none-act'; b.textContent = 'Open a file…';
+    b.addEventListener('click', () => { $('history-panel').hidden = true; openViaPicker(); });
+    none.appendChild(b);
+    list.innerHTML = ''; list.appendChild(none);
   } else {
     recents.forEach(r => list.appendChild(recentRow(r)));
   }
@@ -538,7 +545,16 @@ function renderHome() {
   }
   // recents
   const rl = $('home-recents'); rl.innerHTML = '';
-  if (!recents.length) { rl.innerHTML = '<div class="home-empty">No recent documents yet.</div>'; }
+  if (!recents.length) {
+    const empty = document.createElement('div');
+    empty.className = 'home-empty';
+    empty.textContent = 'No recent documents yet. ';
+    const b = document.createElement('button');
+    b.className = 'home-link'; b.textContent = 'Open a file';
+    b.addEventListener('click', () => { hideHome(); openViaPicker(); });
+    empty.appendChild(b);
+    rl.appendChild(empty);
+  }
   else recents.slice(0, 8).forEach(r => {
     const proj = projectOf(r.path);
     const badge = badgeFor(kindOf(r.name));
@@ -2944,6 +2960,9 @@ const stem = (name) => name.replace(/\.[^.]+$/, '');
 function htmlToMarkdown(html) {
   const td = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced', bulletListMarker: '-' });
   if (window.turndownPluginGfm) td.use(turndownPluginGfm.gfm);
+  // the gfm plugin emits single-tilde ~text~, which markdown-it doesn't parse —
+  // without this override an edit round-trip silently un-strikes text
+  td.addRule('strikethrough2', { filter: ['del', 's', 'strike'], replacement: (c) => '~~' + c + '~~' });
   // keep <mark> highlights as inline HTML (valid markdown, renders in Sutra)
   td.keep(['mark']);
   // callouts → GitHub-style `> [!type]` blockquote (built directly so the
@@ -3935,7 +3954,11 @@ function wireSettings() {
     b.addEventListener('click', () => { settings.font = b.dataset.v; saveSettings(); applySettings(); syncTypePreview(); }));
   $('fs-minus').addEventListener('click', () => { settings.fontSize = Math.max(12, settings.fontSize - 1); saveSettings(); applySettings(); renderSettingsUI(); });
   $('fs-plus').addEventListener('click', () => { settings.fontSize = Math.min(24, settings.fontSize + 1); saveSettings(); applySettings(); renderSettingsUI(); });
-  $('profile-name').addEventListener('change', (e) => { settings.profileName = e.target.value.trim(); saveSettings(); renderSettingsUI(); });
+  // 'input' not 'change': closing the modal before blur must not discard the value
+  $('profile-name').addEventListener('input', (e) => {
+    settings.profileName = e.target.value.trim(); saveSettings();
+    $('empty-title').textContent = settings.profileName ? `Welcome back, ${settings.profileName}` : 'Sutra';
+  });
   $('ai-preset').addEventListener('change', (e) => {
     const p = e.target.value;
     settings.aiProvider = p;
@@ -3946,9 +3969,9 @@ function wireSettings() {
     saveSettings();
     renderAiSettings();
   });
-  $('ai-base').addEventListener('change', (e) => { settings.aiBase = e.target.value.trim(); saveSettings(); });
-  $('ai-model').addEventListener('change', (e) => { settings.aiModel = e.target.value.trim(); saveSettings(); });
-  $('ai-key').addEventListener('change', (e) => { settings.aiKey = e.target.value.trim(); saveSettings(); });
+  $('ai-base').addEventListener('input', (e) => { settings.aiBase = e.target.value.trim(); saveSettings(); });
+  $('ai-model').addEventListener('input', (e) => { settings.aiModel = e.target.value.trim(); saveSettings(); });
+  $('ai-key').addEventListener('input', (e) => { settings.aiKey = e.target.value.trim(); saveSettings(); });
   $('restore-session').addEventListener('change', (e) => { settings.restoreSession = e.target.checked; saveSettings(); });
   $('clear-history').addEventListener('click', () => {
     // clear with undo: keep the snapshot until the toast times out
@@ -3965,6 +3988,19 @@ function wireSettings() {
 }
 
 /* ---------- History panel ---------- */
+
+// Load the bundled sample document (same file the ?demo flag uses)
+async function openSampleDoc() {
+  try {
+    const text = await fetch('samples/demo.md').then(r => r.text());
+    addTab(await makeTab({ name: 'Welcome tour.md', mtime: 0 }, 'md', { text }));
+  } catch (_) { toast('Could not load the sample'); }
+}
+
+function wireEmpty() {
+  $('empty-open').addEventListener('click', () => openViaPicker());
+  $('empty-sample').addEventListener('click', openSampleDoc);
+}
 
 function wireHistory() {
   document.addEventListener('mousedown', (e) => {
@@ -4285,6 +4321,7 @@ async function boot() {
   await loadLibrary();
   wireSettings();
   wireHistory();
+  wireEmpty();
   wireGlobal();
   wireMobile();
   wireTauri();

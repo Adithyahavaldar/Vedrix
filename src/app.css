@@ -1,5 +1,8 @@
 /* ---- App chrome (theme vars come from themes.css) ---- */
 * { box-sizing: border-box; }
+/* The hidden attribute must always win — any `display: flex` etc. on a class
+   silently overrides it otherwise (this bit us: phantom toolbar buttons). */
+[hidden] { display: none !important; }
 /* app shell: the page itself must never scroll — all scrolling happens in
    #scroller/#toc. Without this, absolutely-positioned descendants that escape
    their scroll container (e.g. KaTeX's hidden MathML) grow the body and show
@@ -396,9 +399,19 @@ html[data-font="mono"] .markdown-body { font-family: 'Geist Mono', ui-monospace,
   padding: 40px;
 }
 #empty[hidden] { display: none; }
-#empty .big { font-size: 40px; }
-#empty h2 { margin: 0; font-size: 20px; font-weight: 600; color: var(--fg); }
+.empty-mark {
+  width: 58px; height: 58px; border-radius: 17px;
+  background: var(--accent); color: var(--accent-fg);
+  font: 600 32px 'Newsreader', Georgia, serif;
+  display: flex; align-items: center; justify-content: center;
+  margin-bottom: 6px;
+  box-shadow: 0 10px 26px -10px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+#empty h2 { margin: 0; font: 700 24px 'Hanken Grotesk'; letter-spacing: -.02em; color: var(--fg); }
 #empty p { margin: 0; font-size: 14px; }
+.empty-sub { max-width: 360px; text-align: center; line-height: 1.55; font-size: 13.5px !important; }
+.empty-actions { display: flex; gap: 10px; margin-top: 14px; }
+.empty-drop { font-size: 12px !important; margin-top: 10px !important; }
 #empty kbd {
   font-family: ui-monospace, monospace; font-size: 12px;
   border: 1px solid var(--border); border-bottom-width: 2px;
@@ -678,7 +691,9 @@ body.dragover::after {
 }
 #history-panel .panel-head button:hover { background: var(--hover); }
 #history-list { overflow-y: auto; padding: 4px 6px 8px; }
-#history-list .none { padding: 14px; font-size: 13px; color: var(--text-muted); text-align: center; }
+#history-list .none { padding: 18px 14px; font-size: 13px; color: var(--text-muted); text-align: center; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+#history-list .none-act { font: inherit; font-size: 12.5px; font-weight: 600; padding: 7px 14px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: var(--accent); cursor: pointer; }
+#history-list .none-act:hover { border-color: var(--accent); }
 
 /* ---- Settings modal ---- */
 #settings-overlay {
@@ -1415,7 +1430,13 @@ body.mobile .hint-mobile { display: block; }
   #tabs { flex: 1 1 auto; }                    /* tab strip fills the middle */
 
   .tab { min-width: 96px; max-width: 200px; height: 36px; font-size: 13px; }
-  .tab .tab-close { opacity: .7; }             /* always tappable (no hover on touch) */
+  .tab .tab-close { opacity: .7; width: 28px; height: 28px; font-size: 15px; } /* visible + tappable on touch */
+
+  /* 40px-class touch targets for small controls */
+  #findbar .icon-btn { min-width: 38px; height: 38px; }
+  .stepper button { width: 38px; height: 38px; font-size: 17px; }
+  .seg button { padding: 9px 16px; }
+  .proj-sw { width: 34px; height: 34px; }
 
   /* no hover on touch — project controls must be always visible & big enough to tap */
   .proj-rowadd, .proj-rowmore { opacity: .7; width: 34px; height: 34px; font-size: 17px; }
