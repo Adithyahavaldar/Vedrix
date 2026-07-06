@@ -108,7 +108,9 @@ C1 touch-visible project controls (always-visible, 34px on mobile) · C2 `prompt
 H4 first-run screen (brand tile, Open-a-file + Try-the-sample buttons, drop hint) · H5 re-verified: `applyMobile` + MQ change listener are correct; the earlier stuck-mode repro was a preview-tool artifact · H7 root-caused: turndown-gfm emits single-tilde `~text~` that markdown-it can't parse — edit round-trips silently un-struck text; fixed with a `~~` rule override · M1 touch targets (tab close 18→28px, findbar 24→38px, stepper 26→38px, seg/swatches bumped) · M2 settings text inputs save on `input` (closing the modal can no longer discard an API key) · M4 History and Home empty states got "Open a file" actions.
 **Bonus finding while testing:** phantom toolbar buttons on cold start — `.icon-btn { display:flex }` was overriding the `hidden` attribute (visible in every cold-start screenshot; pre-existing). Fixed globally with `[hidden] { display:none !important }`.
 
-**Phase 3 — Quality & a11y**
-H6 aria-labels + focus-visible + modal focus management · M5/M8 surface silent failures · M7 scroll restore · M3 interaction consistency · L1–L4 polish.
+**Phase 3 — Quality & a11y** ✅ **DONE 2026-07-06**
+H6: every icon button now gets `aria-label` (mirrored from `title`, shortcut hints stripped; a MutationObserver labels dynamically created buttons too) · global `:focus-visible` accent outline · modal focus management (focus moves into the dialog, Tab is trapped inside, focus restores to the trigger on close — verified for settings/project/lang/export/shortcuts/palette) · M5: PDF page render failures show an inline "Page N failed to render" notice; scanned PDFs without a text layer warn once when Find opens · M8: all localStorage writes routed through a quota-safe `lsSet` (toasts at most once/min instead of dying silently) · M7: scroll restore now retries until progressive content (PDF pages) is tall enough to hold the position · L1: sub-11px labels bumped to ≥11px.
+
+**All three phases complete.** Remaining niceties (not scheduled): M3 menu close-pattern unification, M6 toolbar scroll fade, L2–L4.
 
 Each phase is independently shippable (build + install + APK + push).

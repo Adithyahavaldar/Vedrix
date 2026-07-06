@@ -79,7 +79,17 @@ const DEFAULT_SETTINGS = {
 let settings = { ...DEFAULT_SETTINGS };
 try { Object.assign(settings, JSON.parse(localStorage.getItem('mv_settings') || '{}')); } catch (_) {}
 
-function saveSettings() { localStorage.setItem('mv_settings', JSON.stringify(settings)); }
+// Quota-safe localStorage write — a full disk/quota must not fail silently
+// (Android WebView quotas especially). Toast at most once a minute.
+let _lsWarnedAt = 0;
+function lsSet(key, value) {
+  try { localStorage.setItem(key, value); }
+  catch (_) {
+    if (Date.now() - _lsWarnedAt > 60000) { _lsWarnedAt = Date.now(); toast('Storage is full — recent changes may not persist'); }
+  }
+}
+
+function saveSettings() { lsSet('mv_settings', JSON.stringify(settings)); }
 
 const sysDark = window.matchMedia('(prefers-color-scheme: dark)');
 
@@ -113,8 +123,19 @@ function recordRecent(name, path) {
   recents = recents.filter(r => r.path !== path);
   recents.unshift({ name, path, ts: Date.now(), pos: prev ? prev.pos : 0 });
   recents = recents.slice(0, 50);
-  localStorage.setItem('mv_recents', JSON.stringify(recents));
+  lsSet('mv_recents', JSON.stringify(recents));
   renderRecents();
+}
+
+// Re-apply a saved scroll position until the content is tall enough to hold it
+// (PDF pages and images render progressively, so an immediate set gets clamped).
+function restoreScrollWhenReady(tab, pos, tries = 0) {
+  if (activeTab() !== tab) return;
+  tab.scrollTop = pos;
+  scrollerEl.scrollTop = pos;
+  if (Math.abs(scrollerEl.scrollTop - pos) > 4 && tries < 8) {
+    setTimeout(() => restoreScrollWhenReady(tab, pos, tries + 1), 250);
+  }
 }
 
 function savedPosition(path) {
@@ -131,7 +152,7 @@ function rememberPosition() {
     const r = recents.find(r => r.path === t.path);
     if (r) {
       r.pos = scrollerEl.scrollTop;
-      localStorage.setItem('mv_recents', JSON.stringify(recents));
+      lsSet('mv_recents', JSON.stringify(recents));
     }
   }, 600);
 }
@@ -333,7 +354,7 @@ function saveSession() {
   if (!TAURI) return;
   const paths = tabs.filter(t => t.path).map(t => t.path);
   const active = activeTab();
-  localStorage.setItem('mv_session', JSON.stringify({ paths, activePath: active && active.path }));
+  lsSet('mv_session', JSON.stringify({ paths, activePath: active && active.path }));
 }
 
 /* ---------- Panes & TOC ---------- */
@@ -421,7 +442,7 @@ async function saveLibrary() {
   const raw = JSON.stringify(library);
   try {
     if (TAURI) await TAURI.core.invoke('write_library', { contents: raw });
-    else localStorage.setItem('mv_library', raw);
+    else lsSet('mv_library', raw);
   } catch (err) { console.error('saveLibrary', err); }
 }
 
@@ -1372,10 +1393,12 @@ async function renderPdfPage(t, num, holder) {
       await tl.render();
       holder._textLayer = null;
       if (num === 1) diag('textLayer p1 spans=' + textDiv.childElementCount);
-    } catch (_) { /* text layer is progressive enhancement */ }
+    } catch (_) { t._textLayerFailed = true; /* text layer is progressive enhancement */ }
   } catch (err) {
     if (err && err.name === 'RenderingCancelledException') return;
     console.error('pdf page', num, err);
+    // don't leave silent blank space — say which page broke
+    holder.innerHTML = `<div class="page-error">Page ${num} failed to render</div>`;
   }
 }
 
@@ -1687,7 +1710,7 @@ async function openTauriPath(path) {
     const tab = await makeTab({ name, path, mtime: loaded.mtime }, kind, loaded);
     addTab(tab);
     const pos = savedPosition(path);
-    if (pos) { tab.scrollTop = pos; scrollerEl.scrollTop = pos; }
+    if (pos) restoreScrollWhenReady(tab, pos);
   } catch (err) {
     console.error('Failed to open', path, err);
     diag('openTauriPath error: ' + (err && err.message || err));
@@ -1770,6 +1793,11 @@ const findState = { query: '', ranges: [], pdfMatches: [], current: -1 };
 function openFind() {
   const t = activeTab();
   if (!t) return;
+  // scanned/image-only PDFs have no text layer — say so instead of finding nothing
+  if (t.kind === 'pdf' && t._textLayerFailed && !t._tlWarned) {
+    t._tlWarned = true;
+    toast('This PDF has no selectable text — search may find nothing');
+  }
   $('findbar').hidden = false;
   updateReplaceRow();
   $('find-input').focus();
@@ -3981,7 +4009,7 @@ function wireSettings() {
     renderRecents();
     toastAction('History cleared', 'Undo', () => {
       recents = snap;
-      try { localStorage.setItem('mv_recents', JSON.stringify(recents)); } catch (_) {}
+      try { lsSet('mv_recents', JSON.stringify(recents)); } catch (_) {}
       renderRecents();
     });
   });
@@ -4000,6 +4028,62 @@ async function openSampleDoc() {
 function wireEmpty() {
   $('empty-open').addEventListener('click', () => openViaPicker());
   $('empty-sample').addEventListener('click', openSampleDoc);
+}
+
+/* ---------- Accessibility ---------- */
+
+// Icon-only buttons carry their label in title; mirror it to aria-label so
+// screen readers announce them (strip trailing shortcut hints like "(⌘B)").
+function applyAriaLabels(root) {
+  const scope = root && root.querySelectorAll ? root : document;
+  scope.querySelectorAll('button[title]:not([aria-label])').forEach(b =>
+    b.setAttribute('aria-label', b.title.replace(/\s*\([^)]*\)\s*$/, '')));
+}
+
+// Modal focus management: remember where focus was, keep Tab inside the open
+// dialog, and put focus back when it closes.
+const FOCUS_OVERLAYS = ['settings-overlay', 'project-overlay', 'lang-overlay', 'export-overlay', 'shortcuts-overlay', 'cmd-overlay'];
+let _lastFocus = null;
+function wireA11y() {
+  applyAriaLabels(document);
+  // keep labels on dynamically created buttons too
+  new MutationObserver((muts) => {
+    for (const m of muts) for (const n of m.addedNodes) {
+      if (n.nodeType === 1) applyAriaLabels(n.matches && n.matches('button') ? n.parentNode || n : n);
+    }
+  }).observe(document.body, { childList: true, subtree: true });
+
+  const obs = new MutationObserver((muts) => {
+    for (const m of muts) {
+      const el = m.target;
+      if (!el.hidden) {
+        _lastFocus = document.activeElement;
+        setTimeout(() => {  // let the overlay's own focus() win first
+          if (!el.contains(document.activeElement)) {
+            const f = el.querySelector('input:not([type="hidden"]), textarea, select, button');
+            if (f) f.focus();
+          }
+        }, 80);
+      } else if (_lastFocus) {
+        if (_lastFocus.isConnected) _lastFocus.focus();
+        _lastFocus = null;
+      }
+    }
+  });
+  FOCUS_OVERLAYS.forEach(id => { const el = $(id); if (el) obs.observe(el, { attributes: true, attributeFilter: ['hidden'] }); });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Tab') return;
+    const open = FOCUS_OVERLAYS.map(id => $(id)).find(el => el && !el.hidden);
+    if (!open) return;
+    const foci = [...open.querySelectorAll('button, input, textarea, select, [tabindex]:not([tabindex="-1"])')]
+      .filter(el => !el.disabled && el.offsetParent !== null);
+    if (!foci.length) return;
+    const first = foci[0], last = foci[foci.length - 1];
+    if (!open.contains(document.activeElement)) { e.preventDefault(); first.focus(); }
+    else if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
 }
 
 function wireHistory() {
@@ -4322,6 +4406,7 @@ async function boot() {
   wireSettings();
   wireHistory();
   wireEmpty();
+  wireA11y();
   wireGlobal();
   wireMobile();
   wireTauri();
@@ -4355,7 +4440,7 @@ async function boot() {
     if (!tabs.length && !mobileMQ.matches) showHome();
     // first-run shortcuts sheet is desktop-only (⌘ keys don't exist on touch)
     if (!localStorage.getItem('mv_seen')) {
-      localStorage.setItem('mv_seen', '1');
+      lsSet('mv_seen', '1');
       if (!mobileMQ.matches) setTimeout(() => { $('shortcuts-overlay').hidden = false; }, 600);
     }
     if (localStorage.getItem('mv_automap')) {
