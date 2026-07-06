@@ -51,6 +51,37 @@ fn write_file(path: String, contents: String) -> Result<u64, String> {
     mtime_ms(&path)
 }
 
+/// Open the native print panel (WKWebView ignores window.print(), so the
+/// frontend calls this instead; "Save as PDF" lives in that panel).
+#[tauri::command]
+fn print_page(window: tauri::WebviewWindow) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        window.print().map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = window;
+        Err("printing is not supported on this platform".into())
+    }
+}
+
+/// Mobile fallback for exports: Android has no native save dialog, so write
+/// into a reachable app directory and tell the frontend where it went.
+#[tauri::command]
+fn save_export(app: tauri::AppHandle, filename: String, contents: String) -> Result<String, String> {
+    let dir = app
+        .path()
+        .download_dir()
+        .or_else(|_| app.path().document_dir())
+        .or_else(|_| app.path().app_data_dir())
+        .map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(filename);
+    std::fs::write(&path, contents).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
 /// Path to the library sidecar (projects/tags), in the OS app-data dir.
 /// Keyed by file path; never written into the user's documents.
 fn library_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
@@ -216,6 +247,8 @@ pub fn run() {
             take_pending_file,
             read_file_bytes,
             write_file,
+            print_page,
+            save_export,
             read_library,
             write_library,
             list_dir_tree,

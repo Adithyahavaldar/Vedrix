@@ -3007,16 +3007,36 @@ function htmlToMarkdown(html) {
   return td.turndown(html);
 }
 
+// WKWebView silently ignores window.print(); route through the native panel.
+function appPrint() {
+  if (TAURI) {
+    TAURI.core.invoke('print_page').catch((e) => toast('Printing unavailable: ' + e));
+  } else {
+    window.print();
+  }
+}
+
+// Returns: true = saved via dialog · a string = saved to that fallback path ·
+// false = user cancelled. Throws on write failure.
 async function saveTextAs(text, suggested) {
   if (TAURI) {
-    const path = await TAURI.core.invoke('plugin:dialog|save', { options: { defaultPath: suggested } });
-    if (path) await TAURI.core.invoke('write_file', { path, contents: text });
+    try {
+      const path = await TAURI.core.invoke('plugin:dialog|save', { options: { defaultPath: suggested } });
+      if (!path) return false;                       // user cancelled — not a success
+      await TAURI.core.invoke('write_file', { path, contents: text });
+      return true;
+    } catch (err) {
+      // Android has no save dialog — write to a reachable app dir instead
+      const dest = await TAURI.core.invoke('save_export', { filename: suggested, contents: text });
+      return dest;
+    }
   } else {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
     a.download = suggested;
     a.click();
     URL.revokeObjectURL(a.href);
+    return true;
   }
 }
 
@@ -3116,8 +3136,10 @@ function toastAction(msg, actionLabel, onAction, ms = 8000) {
 
 /* ---------- Export dialog (format list · options · live preview) ---------- */
 
+const IS_ANDROID = /android/i.test(navigator.userAgent);
 const EXPORT_FORMATS = [
-  { id: 'pdf', label: 'PDF', desc: 'Print-ready, themed', icon: 'doc', when: () => true },
+  // PDF rides the native print panel — not available on Android
+  { id: 'pdf', label: 'PDF', desc: 'Print-ready, themed', icon: 'doc', when: () => !IS_ANDROID },
   { id: 'html', label: 'HTML', desc: 'Self-contained page', icon: 'doc', when: t => t.kind !== 'pptx' },
   { id: 'md', label: 'Markdown', desc: 'Portable .md', icon: 'doc', when: () => true },
   { id: 'csv', label: 'CSV', desc: 'First sheet, comma-separated', icon: 'doc', when: t => t.kind === 'sheet' },
@@ -3130,7 +3152,8 @@ const exportState = { fmt: 'pdf' };
 function openExportDialog() {
   const t = activeTab();
   if (!t) return;
-  exportState.fmt = (t.kind === 'sheet') ? 'csv' : 'pdf';
+  const avail = EXPORT_FORMATS.filter(f => !f.soon && (!f.when || f.when(t)));
+  exportState.fmt = (t.kind === 'sheet') ? 'csv' : (avail[0] ? avail[0].id : 'md');
   // format list — only formats that apply to this document kind
   const fl = $('export-formats'); fl.innerHTML = '';
   for (const f of EXPORT_FORMATS) {
@@ -3175,7 +3198,7 @@ function wireExportDialog() {
   $('export-go').addEventListener('click', () => {
     const fmt = exportState.fmt;
     $('export-overlay').hidden = true;
-    if (fmt === 'pdf') window.print();
+    if (fmt === 'pdf') appPrint();
     else exportActive(fmt);
   });
 }
@@ -3185,26 +3208,29 @@ async function exportActive(fmt) {
   if (!t) return;
   if (fmt === 'docx' || fmt === 'epub' || fmt === 'png') { toast('“' + fmt.toUpperCase() + '” export needs the pandoc helper (coming soon)'); return; }
   try {
+    let result;
     if (fmt === 'md') {
       const text = TEXT_KINDS.includes(t.kind) ? (t.text || '')
         : t.mdText ? t.mdText
         : t.kind === 'pdf' ? await pdfToMarkdown(t)
         : htmlToMarkdown(t.html || contentEl.innerHTML);
       if (!text.trim()) { toast('Nothing to export — this document has no extractable text'); return; }
-      await saveTextAs(text, stem(t.name) + '.md');
+      result = await saveTextAs(text, stem(t.name) + '.md');
     } else if (fmt === 'html') {
       if (PAGED_KINDS.includes(t.kind) && t.kind !== 'pdf') { toast('HTML export isn’t available for slides yet'); return; }
       const source = t.kind === 'pdf'
         ? { ...t, html: DOMPurify.sanitize(md.render(await pdfToMarkdown(t))) }
         : t;
-      await saveTextAs(await buildStandaloneHtml(source), stem(t.name) + '.html');
+      result = await saveTextAs(await buildStandaloneHtml(source), stem(t.name) + '.html');
     } else if (fmt === 'csv') {
       if (t.kind !== 'sheet' || !t.bytes) { toast('CSV export works on spreadsheets only'); return; }
       const wb = XLSX.read(t.bytes, { type: 'array' });
       const csv = XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]);
-      await saveTextAs(csv, stem(t.name) + '.csv');
+      result = await saveTextAs(csv, stem(t.name) + '.csv');
     }
-    toast('Exported ' + stem(t.name) + '.' + fmt);
+    if (result === false) return;                       // cancelled — say nothing
+    if (typeof result === 'string') toast('Saved to ' + result);
+    else toast('Exported ' + stem(t.name) + '.' + fmt);
   } catch (err) {
     toast('Export failed: ' + (err && err.message || err));
   }
@@ -4238,7 +4264,7 @@ function wireGlobal() {
     else if (mod && e.key === 'f') { e.preventDefault(); openFind(); }
     else if (mod && e.key === 'e') { e.preventDefault(); toggleEdit(); }
     else if (mod && e.key === 'm' && !e.altKey) { e.preventDefault(); toggleMap(); }
-    else if (mod && e.key === 'p') { e.preventDefault(); window.print(); }
+    else if (mod && e.key === 'p') { e.preventDefault(); appPrint(); }
     else if (mod && e.key === 'b') {
       e.preventDefault();
       if (isRichEditing()) EDITOR_CMDS.bold(); else toggleSidebar();
@@ -4399,7 +4425,7 @@ function wireTauri() {
     else if (id === 'export-md') exportActive('md');
     else if (id === 'export-html') exportActive('html');
     else if (id === 'export-csv') exportActive('csv');
-    else if (id === 'print' || id === 'print-doc') window.print();
+    else if (id === 'print' || id === 'print-doc') appPrint();
   });
   TAURI.event.listen('tauri://drag-enter', () => document.body.classList.add('dragover'));
   TAURI.event.listen('tauri://drag-leave', () => document.body.classList.remove('dragover'));
