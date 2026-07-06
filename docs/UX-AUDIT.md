@@ -99,6 +99,20 @@ Post-fix inventory: **0 duplicate glyphs** across topbar / nav rail / context ba
 
 **Lesson recorded:** audits must include a control inventory pass (every icon, its meaning, its home — one function, one place, one glyph).
 
+## Addendum 2 (2026-07-06) — Export had no entry point ✅ FIXED
+
+User-reported: "you didn't add export." The cross-format export dialog (PDF/HTML/Markdown/CSV with theme + page options and live preview) was fully built — but its **only** trigger was the ⌘K command palette: undiscoverable on desktop, unreachable on Android (no keyboard). The inverse of the icon-duplication finding: a function with **zero** homes.
+
+| Fix | Detail |
+|---|---|
+| Topbar Export button | download-tray icon in the doc-actions cluster, visible whenever a document is open (desktop) |
+| Overflow-menu "Export…" | mobile path, shown when a document is open |
+| CSV format tile added | the CSV handler existed but was never listed — spreadsheets now default to it |
+| Per-kind format filtering | formats that don't apply to the open document are omitted instead of silently no-oping |
+| Silent returns → toasts | HTML-for-slides, CSV-for-non-sheets, empty extractions, and thrown errors all say so now |
+
+**Lesson:** the inventory pass must run both directions — every *control* needs one function, and every *function* needs at least one control.
+
 ## Fix plan
 
 **Phase 1 — Touch & safety (critical path, do first)** ✅ **DONE 2026-07-06**

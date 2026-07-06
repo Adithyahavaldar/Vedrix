@@ -1434,7 +1434,7 @@ body.mobile .hint-mobile { display: block; }
   #edit-pill button { padding: 11px 18px; font-size: 14px; }
   .icon-btn { min-width: 40px; height: 40px; font-size: 17px; }
   /* keep only the essentials in the bar; everything else → ⋯ overflow */
-  #open-btn, #live-badge, #map-btn, #reader-btn,
+  #open-btn, #live-badge, #map-btn, #reader-btn, #export-btn,
   #topbar .spacer { display: none !important; }
   #tabs { flex: 1 1 auto; }                    /* tab strip fills the middle */
 

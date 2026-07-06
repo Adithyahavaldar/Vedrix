@@ -11,8 +11,8 @@
 <link rel="stylesheet" href="vendor/fonts/fonts.css">
 <link rel="stylesheet" href="vendor/katex.min.css">
 <link rel="stylesheet" href="vendor/codemirror.css">
-<link rel="stylesheet" href="app.css?v=130">
-<link rel="stylesheet" href="themes.css?v=130">
+<link rel="stylesheet" href="app.css?v=131">
+<link rel="stylesheet" href="themes.css?v=131">
 </head>
 <body>
   <div id="topbar" data-tauri-drag-region>
@@ -29,6 +29,9 @@
       <svg viewBox="0 0 24 24"><circle cx="5.5" cy="12" r="2.4"/><circle cx="17.5" cy="5.5" r="2.2"/><circle cx="17.5" cy="12" r="2.2"/><circle cx="17.5" cy="18.5" r="2.2"/><path d="M7.9 12h7.4M7.7 10.9l7.7-4.4M7.7 13.1l7.7 4.4"/></svg>
     </button>
     <button id="reader-btn" class="icon-btn" title="Reading mode — convert this PDF to Markdown" hidden>Aa</button>
+    <button id="export-btn" class="icon-btn" title="Export — PDF, HTML, Markdown…" hidden>
+      <svg viewBox="0 0 24 24"><path d="M12 3v11M8 10l4 4 4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+    </button>
     <span class="tb-divider"></span>
     <button id="search-chip" title="Search & commands (⌘K)">
       <svg viewBox="0 0 24 24" width="15" height="15"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
@@ -206,6 +209,7 @@
     <button data-act="map" class="ctx-map">Mind map</button>
     <button data-act="reader" class="ctx-reader">Reading mode</button>
     <button data-act="edit" class="ctx-edit">Edit document</button>
+    <button data-act="export" class="ctx-export">Export…</button>
     <button data-act="find">Find in document</button>
     <button data-act="history">History</button>
     <button data-act="settings">Settings</button>
@@ -524,6 +528,6 @@
   window.pdfjsLib = pdfjsLib;
   window.dispatchEvent(new Event('pdfjs-ready'));
 </script>
-<script src="app.js?v=130"></script>
+<script src="app.js?v=131"></script>
 </body>
 </html>

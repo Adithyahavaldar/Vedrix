@@ -1009,6 +1009,7 @@ function renderActive() {
     rb.title = 'Present (full-screen slideshow)';
   }
   $('map-btn').hidden = !(t && t.kind !== 'unsupported');
+  $('export-btn').hidden = !(t && t.kind !== 'unsupported');
   markActiveFile();
   if (!$('ai-panel').hidden) renderAiChat();
   if (graphOpen && folder) { renderGraph(); return; }
@@ -3116,10 +3117,11 @@ function toastAction(msg, actionLabel, onAction, ms = 8000) {
 /* ---------- Export dialog (format list · options · live preview) ---------- */
 
 const EXPORT_FORMATS = [
-  { id: 'pdf', label: 'PDF', desc: 'Print-ready, themed', icon: 'doc' },
-  { id: 'html', label: 'HTML', desc: 'Self-contained page', icon: 'doc' },
-  { id: 'md', label: 'Markdown', desc: 'Portable .md', icon: 'doc' },
-  { id: 'docx', label: 'Word', desc: 'Best-effort .docx', icon: 'doc', pandoc: true },
+  { id: 'pdf', label: 'PDF', desc: 'Print-ready, themed', icon: 'doc', when: () => true },
+  { id: 'html', label: 'HTML', desc: 'Self-contained page', icon: 'doc', when: t => t.kind !== 'pptx' },
+  { id: 'md', label: 'Markdown', desc: 'Portable .md', icon: 'doc', when: () => true },
+  { id: 'csv', label: 'CSV', desc: 'First sheet, comma-separated', icon: 'doc', when: t => t.kind === 'sheet' },
+  { id: 'docx', label: 'Word', desc: 'Best-effort .docx', icon: 'doc', pandoc: true, soon: true },
   { id: 'png', label: 'Image', desc: 'PNG of the page', icon: 'doc', soon: true },
   { id: 'epub', label: 'EPUB', desc: 'E-reader book', icon: 'book', pandoc: true, soon: true },
 ];
@@ -3128,10 +3130,11 @@ const exportState = { fmt: 'pdf' };
 function openExportDialog() {
   const t = activeTab();
   if (!t) return;
-  exportState.fmt = (t.kind === 'sheet') ? 'md' : 'pdf';
-  // format list
+  exportState.fmt = (t.kind === 'sheet') ? 'csv' : 'pdf';
+  // format list — only formats that apply to this document kind
   const fl = $('export-formats'); fl.innerHTML = '';
   for (const f of EXPORT_FORMATS) {
+    if (f.when && !f.when(t)) continue;
     const b = document.createElement('button');
     b.className = 'exp-fmt' + (f.id === exportState.fmt ? ' sel' : '') + (f.soon ? ' soon' : '');
     b.dataset.fmt = f.id;
@@ -3181,25 +3184,30 @@ async function exportActive(fmt) {
   const t = activeTab();
   if (!t) return;
   if (fmt === 'docx' || fmt === 'epub' || fmt === 'png') { toast('“' + fmt.toUpperCase() + '” export needs the pandoc helper (coming soon)'); return; }
-  if (fmt === 'md') {
-    const text = TEXT_KINDS.includes(t.kind) ? (t.text || '')
-      : t.mdText ? t.mdText
-      : t.kind === 'pdf' ? await pdfToMarkdown(t)
-      : htmlToMarkdown(t.html || contentEl.innerHTML);
-    await saveTextAs(text, stem(t.name) + '.md');
-  } else if (fmt === 'html') {
-    if (PAGED_KINDS.includes(t.kind) && t.kind !== 'pdf') return;
-    const source = t.kind === 'pdf'
-      ? { ...t, html: DOMPurify.sanitize(md.render(await pdfToMarkdown(t))) }
-      : t;
-    await saveTextAs(await buildStandaloneHtml(source), stem(t.name) + '.html');
-  } else if (fmt === 'csv') {
-    if (t.kind !== 'sheet' || !t.bytes) return;
-    const wb = XLSX.read(t.bytes, { type: 'array' });
-    const csv = XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]);
-    await saveTextAs(csv, stem(t.name) + '.csv');
+  try {
+    if (fmt === 'md') {
+      const text = TEXT_KINDS.includes(t.kind) ? (t.text || '')
+        : t.mdText ? t.mdText
+        : t.kind === 'pdf' ? await pdfToMarkdown(t)
+        : htmlToMarkdown(t.html || contentEl.innerHTML);
+      if (!text.trim()) { toast('Nothing to export — this document has no extractable text'); return; }
+      await saveTextAs(text, stem(t.name) + '.md');
+    } else if (fmt === 'html') {
+      if (PAGED_KINDS.includes(t.kind) && t.kind !== 'pdf') { toast('HTML export isn’t available for slides yet'); return; }
+      const source = t.kind === 'pdf'
+        ? { ...t, html: DOMPurify.sanitize(md.render(await pdfToMarkdown(t))) }
+        : t;
+      await saveTextAs(await buildStandaloneHtml(source), stem(t.name) + '.html');
+    } else if (fmt === 'csv') {
+      if (t.kind !== 'sheet' || !t.bytes) { toast('CSV export works on spreadsheets only'); return; }
+      const wb = XLSX.read(t.bytes, { type: 'array' });
+      const csv = XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]);
+      await saveTextAs(csv, stem(t.name) + '.csv');
+    }
+    toast('Exported ' + stem(t.name) + '.' + fmt);
+  } catch (err) {
+    toast('Export failed: ' + (err && err.message || err));
   }
-  toast('Exported ' + stem(t.name) + '.' + fmt);
 }
 
 /* ---------- PDF → Markdown reading mode ---------- */
@@ -3899,6 +3907,7 @@ function mapSvgText() {
 
 function wireMap() {
   $('map-btn').addEventListener('click', toggleMap);
+  $('export-btn').addEventListener('click', openExportDialog);
   $('map-fit').addEventListener('click', () => mmInstance && mmInstance.fit());
   $('map-source').addEventListener('click', () => {
     const t = activeTab();
@@ -4122,6 +4131,7 @@ function toggleOverflowMenu(show) {
       readerItem.textContent = 'Reading mode';
     }
     m.querySelector('[data-act="edit"]').classList.toggle('hide', !isEditable(t));
+    m.querySelector('[data-act="export"]').classList.toggle('hide', !t);
     m.querySelector('[data-act="find"]').classList.toggle('hide', !t);
   }
   m.hidden = !open;
@@ -4136,6 +4146,7 @@ const OVERFLOW_ACTIONS = {
     if (t && t.kind === 'html') toggleHtmlMode(); else if (t && t.kind === 'pptx') startPresentation(); else openReadingMode();
   },
   edit: toggleEdit,
+  export: openExportDialog,
   find: openFind,
   history: () => { $('history-panel').hidden = false; },
   settings: () => { $('settings-overlay').hidden = false; },
