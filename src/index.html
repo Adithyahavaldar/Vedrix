@@ -11,8 +11,8 @@
 <link rel="stylesheet" href="vendor/fonts/fonts.css">
 <link rel="stylesheet" href="vendor/katex.min.css">
 <link rel="stylesheet" href="vendor/codemirror.css">
-<link rel="stylesheet" href="app.css?v=127">
-<link rel="stylesheet" href="themes.css?v=127">
+<link rel="stylesheet" href="app.css?v=128">
+<link rel="stylesheet" href="themes.css?v=128">
 </head>
 <body>
   <div id="topbar" data-tauri-drag-region>
@@ -26,12 +26,9 @@
     </button>
     <span class="spacer" data-tauri-drag-region></span>
     <button id="map-btn" class="icon-btn" title="Mind map view (⌘M)" hidden>
-      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 4v4M12 16v4M4 12h4M16 12h4"/></svg>
+      <svg viewBox="0 0 24 24"><circle cx="5.5" cy="12" r="2.4"/><circle cx="17.5" cy="5.5" r="2.2"/><circle cx="17.5" cy="12" r="2.2"/><circle cx="17.5" cy="18.5" r="2.2"/><path d="M7.9 12h7.4M7.7 10.9l7.7-4.4M7.7 13.1l7.7 4.4"/></svg>
     </button>
     <button id="reader-btn" class="icon-btn" title="Reading mode — convert this PDF to Markdown" hidden>Aa</button>
-    <button id="edit-btn" class="icon-btn" title="Edit document (⌘E)" hidden>
-      <svg viewBox="0 0 24 24"><path d="M4 20h4L18 8l-4-4L4 16z"/></svg>
-    </button>
     <span class="tb-divider"></span>
     <button id="search-chip" title="Search & commands (⌘K)">
       <svg viewBox="0 0 24 24" width="15" height="15"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
@@ -39,12 +36,6 @@
     </button>
     <button id="ai-btn" class="icon-btn" title="AI assistant (⌘J)">
       <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 2l1.9 6.1L20 10l-6.1 1.9L12 18l-1.9-6.1L4 10l6.1-1.9z"/></svg>
-    </button>
-    <button id="settings-btn" class="icon-btn topbar-full" title="Theme & settings (⌘,)">
-      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.2"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6L17 7M7 17l-1.4 1.4"/></svg>
-    </button>
-    <button id="history-btn" class="icon-btn topbar-full" title="History of opened files">
-      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>
     </button>
     <button id="open-btn" class="icon-btn topbar-full" title="Open a file (⌘O)">
       <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
@@ -225,12 +216,12 @@
     <nav id="nav-rail" hidden>
       <button class="nr-mark" id="nr-home2" title="Home">S</button>
       <button class="nr-btn" data-nav="home" title="Home"><svg viewBox="0 0 24 24"><path d="M4 11l8-6 8 6v8a1 1 0 0 1-1 1h-5v-6h-4v6H5a1 1 0 0 1-1-1z"/></svg></button>
-      <button class="nr-btn" data-nav="files" title="Files"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button>
+      <button class="nr-btn" data-nav="files" title="Files"><svg viewBox="0 0 24 24"><rect x="8" y="3" width="13" height="14" rx="2"/><path d="M4 7v10a4 4 0 0 0 4 4h9"/></svg></button>
       <button class="nr-btn" data-nav="projects" title="Projects"><svg viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></svg></button>
       <button class="nr-btn" data-nav="graph" title="Knowledge graph"><svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="9" r="2.5"/><circle cx="9" cy="18" r="2.5"/><path d="M8 7.5l8 1M8 16l1-6"/></svg></button>
       <span class="nr-spacer"></span>
       <button class="nr-btn" data-nav="history" title="History"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg></button>
-      <button class="nr-btn" data-nav="settings" title="Settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.2"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6L17 7M7 17l-1.4 1.4"/></svg></button>
+      <button class="nr-btn" data-nav="settings" title="Settings"><svg viewBox="0 0 24 24"><path d="M4 7h2.6M11.6 7H20M4 12h8.6M17.6 12H20M4 17h0.6M9.6 17H20"/><circle cx="9" cy="7" r="2.3"/><circle cx="15" cy="12" r="2.3"/><circle cx="7" cy="17" r="2.3"/></svg></button>
     </nav>
 
     <div id="home" hidden>
@@ -531,6 +522,6 @@
   window.pdfjsLib = pdfjsLib;
   window.dispatchEvent(new Event('pdfjs-ready'));
 </script>
-<script src="app.js?v=127"></script>
+<script src="app.js?v=128"></script>
 </body>
 </html>

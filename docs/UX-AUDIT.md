@@ -83,6 +83,22 @@ The demo doc's `~strikethrough~` renders as literal tildes (markdown-it needs `~
 
 ---
 
+## Addendum (2026-07-06) — icon & control duplication ✅ FIXED
+
+User-reported after the initial audit, which missed this category entirely. Verified by a programmatic glyph inventory (hash every visible chrome button's SVG, group duplicates):
+
+| Finding | Fix |
+|---|---|
+| **Settings appeared twice** (topbar + rail bottom) with an icon that reads as a *sun*, not a gear | Topbar `#settings-btn` removed — the rail owns it (mobile: overflow menu). Icon replaced with an unambiguous sliders glyph |
+| **History appeared twice** (topbar clock + rail clock) | Topbar `#history-btn` removed; rail owns it. History panel re-anchored to open next to the rail trigger (was popping up top-right, far from its new button) |
+| **Edit pencil duplicated the Read/Edit segment** directly below it | Topbar `#edit-btn` removed; the context-bar segment is the single mode switch (⌘E still works) |
+| **Mind-map icon ≈ AI sparkle** (circle + 4 spokes reads as a 4-point star at 16px) | Replaced with a real mind-map glyph (root node + 3 branches) |
+| **Open (topbar) and Files (rail) shared the same folder glyph** for different actions | Rail Files → stacked-documents glyph |
+
+Post-fix inventory: **0 duplicate glyphs** across topbar / nav rail / context bar at both breakpoints.
+
+**Lesson recorded:** audits must include a control inventory pass (every icon, its meaning, its home — one function, one place, one glyph).
+
 ## Fix plan
 
 **Phase 1 — Touch & safety (critical path, do first)** ✅ **DONE 2026-07-06**

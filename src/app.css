@@ -653,7 +653,8 @@ body.dragover::after {
 
 /* ---- History panel ---- */
 #history-panel {
-  position: fixed; top: 46px; right: 52px;
+  /* anchored near its trigger: the History button at the bottom of the nav rail */
+  position: fixed; bottom: 14px; left: 60px; top: auto; right: auto;
   width: 400px; max-height: 480px;
   display: flex; flex-direction: column;
   background: var(--panel);
@@ -1409,7 +1410,7 @@ body.mobile .hint-mobile { display: block; }
   #edit-pill button { padding: 11px 18px; font-size: 14px; }
   .icon-btn { min-width: 40px; height: 40px; font-size: 17px; }
   /* keep only the essentials in the bar; everything else → ⋯ overflow */
-  #open-btn, #live-badge, #map-btn, #reader-btn, #edit-btn, #history-btn,
+  #open-btn, #live-badge, #map-btn, #reader-btn,
   #topbar .spacer { display: none !important; }
   #tabs { flex: 1 1 auto; }                    /* tab strip fills the middle */
 
@@ -1477,6 +1478,6 @@ body.mobile .hint-mobile { display: block; }
   .setting-row input[type="text"],
   .setting-row input[type="password"],
   .setting-row select { width: 100%; }
-  #history-panel { top: 52px; right: 8px; left: 8px; width: auto; }
+  #history-panel { top: 52px; right: 8px; left: 8px; bottom: auto; width: auto; }
   .icon-btn svg { width: 18px; height: 18px; }
 }

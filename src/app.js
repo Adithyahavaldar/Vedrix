@@ -971,7 +971,6 @@ function renderActive() {
     rb.innerHTML = '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M12 16v4M8 20h8"/></svg>';
     rb.title = 'Present (full-screen slideshow)';
   }
-  $('edit-btn').hidden = !isEditable(t);
   $('map-btn').hidden = !(t && t.kind !== 'unsupported');
   markActiveFile();
   if (!$('ai-panel').hidden) renderAiChat();
@@ -3926,7 +3925,6 @@ function renderAiSettings() {
 }
 
 function wireSettings() {
-  $('settings-btn').addEventListener('click', () => { $('settings-overlay').hidden = false; });
   $('settings-close').addEventListener('click', () => { $('settings-overlay').hidden = true; });
   $('settings-overlay').addEventListener('mousedown', (e) => { if (e.target === e.currentTarget) $('settings-overlay').hidden = true; });
   document.querySelectorAll('#settings-nav .set-nav-item[data-sec]').forEach(b =>
@@ -3969,10 +3967,6 @@ function wireSettings() {
 /* ---------- History panel ---------- */
 
 function wireHistory() {
-  $('history-btn').addEventListener('click', (e) => {
-    e.stopPropagation();
-    $('history-panel').hidden = !$('history-panel').hidden;
-  });
   document.addEventListener('mousedown', (e) => {
     if (!$('history-panel').hidden && !e.target.closest('#history-panel')) $('history-panel').hidden = true;
   });
@@ -4085,7 +4079,6 @@ function wireGlobal() {
   $('new-tab').addEventListener('click', openViaPicker);
   $('search-chip').addEventListener('click', openCmd);
   $('toc-toggle').addEventListener('click', toggleSidebar);
-  $('edit-btn').addEventListener('click', toggleEdit);
   $('reader-btn').addEventListener('click', () => {
     const t = activeTab();
     if (t && t.kind === 'html') toggleHtmlMode(); else if (t && t.kind === 'pptx') startPresentation(); else openReadingMode();
