@@ -11,8 +11,8 @@
 <link rel="stylesheet" href="vendor/fonts/fonts.css">
 <link rel="stylesheet" href="vendor/katex.min.css">
 <link rel="stylesheet" href="vendor/codemirror.css">
-<link rel="stylesheet" href="app.css?v=126">
-<link rel="stylesheet" href="themes.css?v=126">
+<link rel="stylesheet" href="app.css?v=127">
+<link rel="stylesheet" href="themes.css?v=127">
 </head>
 <body>
   <div id="topbar" data-tauri-drag-region>
@@ -130,6 +130,18 @@
   </div>
 
   <div id="assign-menu" hidden></div>
+
+  <div id="lang-overlay" hidden>
+    <div id="lang-card">
+      <div class="lang-title">Translate to…</div>
+      <input id="lang-input" type="text" placeholder="Any language" spellcheck="false" autocomplete="off">
+      <div id="lang-chips"></div>
+      <div class="proj-actions">
+        <button id="lang-cancel" class="btn-ghost">Cancel</button>
+        <button id="lang-go" class="btn-accent">Translate</button>
+      </div>
+    </div>
+  </div>
 
   <div id="present-overlay" hidden>
     <div id="present-stage"></div>
@@ -519,6 +531,6 @@
   window.pdfjsLib = pdfjsLib;
   window.dispatchEvent(new Event('pdfjs-ready'));
 </script>
-<script src="app.js?v=126"></script>
+<script src="app.js?v=127"></script>
 </body>
 </html>

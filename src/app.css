@@ -1105,8 +1105,63 @@ body.editing #scroller { flex: 1; }
   font-size: 13px; font-weight: 500; padding: 10px 18px; border-radius: 10px;
   box-shadow: 0 14px 34px -12px rgba(0,0,0,.5);
   opacity: 0; pointer-events: none; transition: opacity .18s, transform .18s; z-index: 300;
+  display: inline-flex; align-items: center; gap: 12px;
 }
-#mv-toast.show { opacity: 1; transform: translateX(-50%); }
+#mv-toast.show { opacity: 1; transform: translateX(-50%); pointer-events: auto; }
+#mv-toast .toast-act {
+  font: inherit; font-size: 12.5px; font-weight: 700;
+  border: none; background: transparent; color: var(--bg);
+  text-decoration: underline; text-underline-offset: 3px;
+  padding: 4px 2px; cursor: pointer;
+}
+
+/* ---- Translate language dialog ---- */
+#lang-overlay {
+  position: fixed; inset: 0; z-index: 240;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,.35);
+}
+#lang-overlay[hidden] { display: none; }
+#lang-card {
+  width: min(360px, 90vw);
+  background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: 0 20px 60px rgba(0,0,0,.35);
+  padding: 18px 18px 16px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.lang-title { font: 700 15px 'Hanken Grotesk'; }
+#lang-input {
+  font: inherit; font-size: 14px; padding: 9px 12px;
+  border: 1px solid var(--border); border-radius: 9px;
+  background: var(--bg); color: var(--fg); outline: none;
+}
+#lang-input:focus { border-color: var(--accent); }
+#lang-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.lang-chip {
+  font: inherit; font-size: 12px; padding: 5px 11px;
+  border: 1px solid var(--border); border-radius: 16px;
+  background: var(--bg); color: var(--fg); cursor: pointer;
+}
+.lang-chip:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ---- AI setup card (no provider configured) ---- */
+.ai-setup {
+  margin: auto 8px; padding: 22px 18px;
+  border: 1px solid var(--border); border-radius: 14px; background: var(--bg);
+  display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center;
+}
+.ai-setup-ic { width: 38px; height: 38px; border-radius: 11px; background: var(--accent); color: var(--accent-fg); display: flex; align-items: center; justify-content: center; }
+.ai-setup-ic svg { width: 20px; height: 20px; }
+.ai-setup-t { font: 700 14.5px 'Hanken Grotesk'; }
+.ai-setup-d { font-size: 12.5px; color: var(--text-muted); line-height: 1.5; max-width: 300px; }
+.ai-setup .btn-accent { margin-top: 6px; }
+.ai-fixbtn {
+  display: block; margin-top: 7px;
+  font: inherit; font-size: 12px; font-weight: 600; padding: 5px 12px;
+  border: 1px solid var(--accent); border-radius: 8px;
+  background: transparent; color: var(--accent); cursor: pointer;
+}
+.ai-fixbtn:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 
 /* ---- Export dialog ---- */
 #export-overlay { position: fixed; inset: 0; z-index: 245; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.4); }
@@ -1360,6 +1415,21 @@ body.mobile .hint-mobile { display: block; }
 
   .tab { min-width: 96px; max-width: 200px; height: 36px; font-size: 13px; }
   .tab .tab-close { opacity: .7; }             /* always tappable (no hover on touch) */
+
+  /* no hover on touch — project controls must be always visible & big enough to tap */
+  .proj-rowadd, .proj-rowmore { opacity: .7; width: 34px; height: 34px; font-size: 17px; }
+  .proj-row { padding: 8px 8px; }
+  .pd-x { opacity: .55; padding: 8px 12px; }
+  .proj-doc { min-height: 42px; }
+  .proj-row .proj-count { display: none; }     /* make room for the buttons */
+
+  /* keyboard-shortcut hints mean nothing on touch */
+  #search-chip .kbd { display: none; }
+
+  /* context bar: drop the meta so Read/Edit + Saved never collide with it */
+  #ctx-meta, #ctx-meta-sep { display: none; }
+  #context-bar { gap: 8px; }
+  #ctx-path { flex: 0 1 auto; min-width: 0; }
 
   /* sidebar → slide-in drawer over the content */
   #sidebar {

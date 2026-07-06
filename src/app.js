@@ -642,9 +642,17 @@ function openProjectContext(e, p) {
   m.querySelector('[data-a="add"]').addEventListener('click', (ev) => { m.hidden = true; openAddDocMenu(ev, p); });
   m.querySelector('[data-a="edit"]').addEventListener('click', () => { m.hidden = true; openProjectModal(null, p); });
   m.querySelector('[data-a="delete"]').addEventListener('click', () => {
+    // delete with undo: snapshot the project + its assignments, restore on tap
+    const snapProject = p;
+    const snapAssigns = Object.keys(library.assign).filter(k => library.assign[k] === p.id);
     library.projects = library.projects.filter(x => x.id !== p.id);
-    Object.keys(library.assign).forEach(k => { if (library.assign[k] === p.id) delete library.assign[k]; });
+    snapAssigns.forEach(k => delete library.assign[k]);
     saveLibrary(); renderProjects(); renderTabStrip(); if (homeShown) renderHome(); m.hidden = true;
+    toastAction(`Deleted “${p.name}”`, 'Undo', () => {
+      library.projects.push(snapProject);
+      snapAssigns.forEach(k => { library.assign[k] = snapProject.id; });
+      saveLibrary(); renderProjects(); renderTabStrip(); if (homeShown) renderHome();
+    });
   });
   showMenuAt(m, e.clientX, e.clientY);
 }
@@ -3045,6 +3053,20 @@ function toast(msg) {
   toastTimer = setTimeout(() => el.classList.remove('show'), 1900);
 }
 
+// Toast with an action button — used as an Undo affordance for destructive actions
+function toastAction(msg, actionLabel, onAction, ms = 8000) {
+  let el = $('mv-toast');
+  if (!el) { el = document.createElement('div'); el.id = 'mv-toast'; document.body.appendChild(el); }
+  el.textContent = msg;
+  const b = document.createElement('button');
+  b.className = 'toast-act'; b.textContent = actionLabel;
+  b.addEventListener('click', () => { el.classList.remove('show'); clearTimeout(toastTimer); onAction(); });
+  el.appendChild(b);
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), ms);
+}
+
 /* ---------- Export dialog (format list · options · live preview) ---------- */
 
 const EXPORT_FORMATS = [
@@ -3443,9 +3465,9 @@ async function aiPost(url, headers, bodyObj) {
 // so ANY provider — cloud or local — works.
 async function callAI({ system, messages, schema }) {
   const cfg = aiConfig();
-  if (!cfg.model) throw new Error('No model set — choose a provider and model in Settings (⌘,)');
-  if (!cfg.key && !cfg.local) throw new Error('No API key — add one in Settings (⌘,)');
-  if (!cfg.base) throw new Error('No API base URL — set one in Settings (⌘,)');
+  if (!cfg.model) throw new Error('No model set — choose a provider and model in Settings');
+  if (!cfg.key && !cfg.local) throw new Error('No API key — add one in Settings');
+  if (!cfg.base) throw new Error('No API base URL — set one in Settings');
 
   if (cfg.format === 'anthropic') {
     const body = { model: cfg.model, max_tokens: 8192, system, messages };
@@ -3551,7 +3573,45 @@ function aiInsertAsNote(content) {
 function renderAiChat() {
   const t = activeTab();
   $('ai-messages').innerHTML = '';
-  for (const m of (t && t.aiChat) || []) aiMsgEl(m.role, m.content);
+  const chat = (t && t.aiChat) || [];
+  for (const m of chat) aiMsgEl(m.role, m.content);
+  // No provider configured → show a setup card instead of letting the user
+  // type a question that can only fail.
+  if (!chat.length) {
+    const cfg = aiConfig();
+    if (!cfg.model || !cfg.base || (!cfg.key && !cfg.local)) {
+      const card = document.createElement('div');
+      card.className = 'ai-setup';
+      card.innerHTML = `
+        <div class="ai-setup-ic"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.9 6.1L20 10l-6.1 1.9L12 18l-1.9-6.1L4 10l6.1-1.9z"/></svg></div>
+        <div class="ai-setup-t">Connect an AI provider</div>
+        <div class="ai-setup-d">Chat with your documents, summarize, translate, and build concept maps. Works with Claude, OpenAI, Gemini — or free local models via Ollama.</div>`;
+      const b = document.createElement('button');
+      b.className = 'btn-accent'; b.textContent = 'Open AI settings';
+      b.addEventListener('click', openAiSettings);
+      card.appendChild(b);
+      $('ai-messages').appendChild(card);
+    }
+  }
+}
+
+// Deep-link into Settings → AI assistant
+function openAiSettings() {
+  $('settings-overlay').hidden = false;
+  showSettingsSection('ai');
+  if (mobileMQ.matches) toggleAiPanel(false); // panel is full-screen on mobile; get it out of the way
+}
+
+// Error row with a fix-it button when the problem is fixable in Settings
+function aiErrorEl(err) {
+  const el = aiMsgEl('info', '⚠ ' + err.message);
+  if (/settings/i.test(err.message)) {
+    const b = document.createElement('button');
+    b.className = 'ai-fixbtn'; b.textContent = 'Open AI settings';
+    b.addEventListener('click', openAiSettings);
+    el.appendChild(b);
+  }
+  return el;
 }
 
 let aiBusy = false;
@@ -3573,7 +3633,7 @@ async function aiAsk(userText, { system, transient } = {}) {
     aiMsgEl('assistant', answer);
   } catch (err) {
     busyEl.remove();
-    aiMsgEl('info', '⚠ ' + err.message);
+    aiErrorEl(err);
     if (!transient) t.aiChat.pop();
   } finally { aiBusy = false; }
 }
@@ -3600,14 +3660,44 @@ async function aiConceptMap() {
     renderActive();
   } catch (err) {
     busyEl.remove();
-    aiMsgEl('info', '⚠ ' + err.message);
+    aiErrorEl(err);
   } finally { aiBusy = false; }
+}
+
+// In-app language picker (window.prompt breaks the design and is a no-op in some webviews)
+const LANG_SUGGESTIONS = ['English', 'Hindi', 'Spanish', 'French', 'German', 'Japanese', 'Chinese'];
+function askLanguage() {
+  return new Promise((resolve) => {
+    const ov = $('lang-overlay'), input = $('lang-input');
+    const chips = $('lang-chips'); chips.innerHTML = '';
+    const langs = [...new Set([settings.aiLastLang, ...LANG_SUGGESTIONS].filter(Boolean))].slice(0, 7);
+    const done = (val) => { ov.hidden = true; cleanup(); resolve(val ? val.trim() : null); };
+    for (const l of langs) {
+      const b = document.createElement('button'); b.className = 'lang-chip'; b.textContent = l;
+      b.addEventListener('click', () => done(l));
+      chips.appendChild(b);
+    }
+    input.value = settings.aiLastLang || '';
+    const onKey = (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); done(input.value); }
+      else if (e.key === 'Escape') { e.stopPropagation(); done(null); }
+    };
+    const onDown = (e) => { if (e.target === ov) done(null); };
+    const cleanup = () => { input.removeEventListener('keydown', onKey); ov.removeEventListener('mousedown', onDown); go.onclick = cancel.onclick = null; };
+    const go = $('lang-go'), cancel = $('lang-cancel');
+    go.onclick = () => done(input.value);
+    cancel.onclick = () => done(null);
+    input.addEventListener('keydown', onKey);
+    ov.addEventListener('mousedown', onDown);
+    ov.hidden = false;
+    setTimeout(() => { input.focus(); input.select(); }, 30);
+  });
 }
 
 async function aiTranslate() {
   const t = activeTab();
   if (!t || aiBusy) return;
-  const lang = (window.prompt('Translate this document to which language?', settings.aiLastLang || 'English') || '').trim();
+  const lang = await askLanguage();
   if (!lang) return;
   settings.aiLastLang = lang; saveSettings();
   aiBusy = true;
@@ -3625,7 +3715,7 @@ async function aiTranslate() {
     aiMsgEl('info', 'Translation opened in a new tab.');
   } catch (err) {
     busyEl.remove();
-    aiMsgEl('info', '⚠ ' + err.message);
+    aiErrorEl(err);
   } finally { aiBusy = false; }
 }
 
@@ -3832,7 +3922,7 @@ function renderAiSettings() {
   $('ai-model').value = settings.aiModel || preset.model;
   $('ai-key').value = settings.aiKey || '';
   $('ai-key').placeholder = preset.keyHint;
-  $('ai-note').textContent = 'Stored only on this Mac. ' + preset.note;
+  $('ai-note').textContent = (mobileMQ.matches ? 'Stored only on this device. ' : 'Stored only on this Mac. ') + preset.note;
 }
 
 function wireSettings() {
@@ -3863,9 +3953,16 @@ function wireSettings() {
   $('ai-key').addEventListener('change', (e) => { settings.aiKey = e.target.value.trim(); saveSettings(); });
   $('restore-session').addEventListener('change', (e) => { settings.restoreSession = e.target.checked; saveSettings(); });
   $('clear-history').addEventListener('click', () => {
+    // clear with undo: keep the snapshot until the toast times out
+    const snap = recents;
     recents = [];
     localStorage.removeItem('mv_recents');
     renderRecents();
+    toastAction('History cleared', 'Undo', () => {
+      recents = snap;
+      try { localStorage.setItem('mv_recents', JSON.stringify(recents)); } catch (_) {}
+      renderRecents();
+    });
   });
 }
 
