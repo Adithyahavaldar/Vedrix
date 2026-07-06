@@ -113,6 +113,10 @@ User-reported: "you didn't add export." The cross-format export dialog (PDF/HTML
 
 **Lesson:** the inventory pass must run both directions — every *control* needs one function, and every *function* needs at least one control.
 
+**Follow-up (same day):** entry points alone weren't enough — the user then found no real file was ever produced. Root cause: PDF (the default format) called `window.print()`, a **silent no-op in WKWebView**; the dialog closed and nothing happened (⌘P and the palette Print were equally dead). Fixed with a native `print_page` Rust command (real macOS print panel — "Save as PDF" lives there), an Android `save_export` fallback (no save dialog exists on mobile), truthful save results (cancelling no longer toasts "Exported"), and PDF hidden on Android. **Verified on the installed app by driving it on-screen: a real 24 KB .md landed on disk; the print panel opens.**
+
+**Lesson 2:** "verified in the browser preview" ≠ verified. Tauri-only paths (native dialogs, print, IPC) must be exercised in the real app — the browser's fallback (blob downloads) masks broken native paths.
+
 ## Fix plan
 
 **Phase 1 — Touch & safety (critical path, do first)** ✅ **DONE 2026-07-06**
