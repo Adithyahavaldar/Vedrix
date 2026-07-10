@@ -11,8 +11,8 @@
 <link rel="stylesheet" href="vendor/fonts/fonts.css">
 <link rel="stylesheet" href="vendor/katex.min.css">
 <link rel="stylesheet" href="vendor/codemirror.css">
-<link rel="stylesheet" href="app.css?v=133">
-<link rel="stylesheet" href="themes.css?v=133">
+<link rel="stylesheet" href="app.css?v=141">
+<link rel="stylesheet" href="themes.css?v=141">
 </head>
 <body>
   <div id="topbar" data-tauri-drag-region>
@@ -160,9 +160,29 @@
             <label>Theme</label>
             <span class="seg" id="exp-theme"><button data-v="light" class="sel">Light</button><button data-v="dark">Dark</button><button data-v="current">Current</button></span>
           </div>
+          <div class="exp-opt-group" id="exp-font-group">
+            <label>Font</label>
+            <span class="seg" id="exp-font"><button data-v="current" class="sel">Current</button><button data-v="system">Sans</button><button data-v="serif">Serif</button><button data-v="mono">Mono</button></span>
+          </div>
+          <div class="exp-opt-group" id="exp-size-group">
+            <label>Text size</label>
+            <span class="stepper"><button id="exp-fs-minus">−</button><span class="val" id="exp-fs-val">16px</span><button id="exp-fs-plus">+</button></span>
+          </div>
           <div class="exp-opt-group" id="exp-page-group">
             <label>Page size</label>
             <span class="seg" id="exp-page"><button data-v="a4" class="sel">A4</button><button data-v="letter">Letter</button></span>
+          </div>
+          <div class="exp-opt-group" id="exp-margin-group">
+            <label>Margins</label>
+            <span class="seg" id="exp-margin"><button data-v="compact">Compact</button><button data-v="normal" class="sel">Normal</button><button data-v="wide">Wide</button></span>
+          </div>
+          <div class="exp-hf" id="exp-hf-group">
+            <label>Header <em>· masthead at the top</em></label>
+            <input id="exp-header" type="text" placeholder="Optional" spellcheck="false" autocomplete="off">
+            <div class="exp-chips" id="exp-header-chips"></div>
+            <label>Footer <em>· closing line at the end</em></label>
+            <input id="exp-footer" type="text" placeholder="Optional" spellcheck="false" autocomplete="off">
+            <div class="exp-chips" id="exp-footer-chips"></div>
           </div>
           <div class="exp-note" id="exp-note"></div>
         </div>
@@ -526,6 +546,6 @@
   window.pdfjsLib = pdfjsLib;
   window.dispatchEvent(new Event('pdfjs-ready'));
 </script>
-<script src="app.js?v=133"></script>
+<script src="app.js?v=141"></script>
 </body>
 </html>

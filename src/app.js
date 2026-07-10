@@ -3016,10 +3016,43 @@ function appPrint(opts = {}) {
   const t = activeTab();
   const prevTitle = document.title;
   if (t) document.title = stem(t.name);               // → suggested PDF filename
-  // page size
+  // page size + margins + typography (print-only styles)
+  const MARGINS = { compact: '8mm', normal: '14mm', wide: '22mm' };
+  const margin = MARGINS[opts.margin] || MARGINS.normal;
+  // Typography as PRINT-ONLY CSS — immune to any focus/applySettings race
+  // that could revert a live DOM swap before the panel renders.
+  const FAMS = {
+    system: "'Hanken Grotesk', -apple-system, BlinkMacSystemFont, sans-serif",
+    serif: "'Newsreader', 'Iowan Old Style', Georgia, serif",
+    mono: "'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace",
+  };
   let ps = document.getElementById('print-page-style');
   if (!ps) { ps = document.createElement('style'); ps.id = 'print-page-style'; document.head.appendChild(ps); }
-  ps.textContent = `@page { size: ${opts.page === 'letter' ? 'letter' : 'A4'}; margin: 14mm; }`;
+  ps.textContent = `@page { size: ${opts.page === 'letter' ? 'letter' : 'A4'}; margin: ${margin}; }`
+    + (opts.size ? `\n@media print { .markdown-body { font-size: ${opts.size}px !important; } }` : '')
+    + (opts.font && FAMS[opts.font] ? `\n@media print { .markdown-body { font-family: ${FAMS[opts.font]} !important; } }` : '');
+  // Header/footer as flow blocks at the top and bottom of the printed content.
+  // (WebKit's print engine has no reliable per-page running header: @page margin
+  // boxes are unsupported, position:fixed paints page 1 only, and a thead/tfoot
+  // wrap fragments incorrectly. Flowing blocks are the one mechanism that always
+  // renders, so header = document masthead, footer = closing line.)
+  // MUST target the reader content by id — when the export dialog is open its
+  // preview pane (#export-preview-inner) is also a .markdown-body and comes
+  // first in the DOM, so querySelector('.markdown-body') would inject into the
+  // preview (hidden at print) and nothing would reach the PDF.
+  const body = document.getElementById('content');
+  document.getElementById('print-hf-top')?.remove();
+  document.getElementById('print-hf-bot')?.remove();
+  if (body && opts.header) {
+    const h = document.createElement('div');
+    h.id = 'print-hf-top'; h.className = 'print-run print-run-top'; h.textContent = opts.header;
+    body.insertBefore(h, body.firstChild);
+  }
+  if (body && opts.footer) {
+    const f = document.createElement('div');
+    f.id = 'print-hf-bot'; f.className = 'print-run print-run-bot'; f.textContent = opts.footer;
+    body.appendChild(f);
+  }
   // theme swap (only when the effective base differs from the request)
   const cur = THEMES.find(th => th.key === settings.theme) || THEMES[0];
   const curBase = cur.base === 'system' ? (sysDark.matches ? 'dark' : 'light') : cur.base;
@@ -3029,18 +3062,21 @@ function appPrint(opts = {}) {
     settings.theme = want === 'dark' ? 'github-dark' : 'github-light';
     applySettings();
   }
-  // restore once the print panel closes and the window regains focus
+  // restore once the print panel closes and the window regains focus.
+  // NOTE: do NOT remove the header/footer blocks here — the 'focus' event
+  // fires when the native print sheet appears, which would strip them out
+  // before the PDF is actually rendered. They're display:none on screen, so
+  // they stay harmlessly in #content until the next print() clears them.
   const restore = () => {
     document.title = prevTitle;
     if (prevTheme) { settings.theme = prevTheme; applySettings(); }
   };
-  window.addEventListener('focus', restore, { once: true });
   if (TAURI) {
+    window.addEventListener('focus', restore, { once: true });
     TAURI.core.invoke('print_page').catch((e) => { toast('Printing unavailable: ' + e); restore(); });
   } else {
     window.print();
     restore();
-    window.removeEventListener('focus', restore);
   }
 }
 
@@ -3068,9 +3104,10 @@ async function saveTextAs(text, suggested) {
   }
 }
 
-async function buildStandaloneHtml(t) {
+async function buildStandaloneHtml(t, opts = {}) {
   const theme = THEMES.find(th => th.key === settings.theme) || THEMES[0];
-  const dark = theme.base === 'dark' || (theme.base === 'system' && sysDark.matches);
+  const curDark = theme.base === 'dark' || (theme.base === 'system' && sysDark.matches);
+  const dark = opts.theme === 'dark' ? true : opts.theme === 'light' ? false : curDark;
   const cssMd = await (await fetch(dark ? 'vendor/github-markdown-dark.css' : 'vendor/github-markdown-light.css')).text();
   const cssHl = await (await fetch(dark ? 'vendor/hljs-github-dark.css' : 'vendor/hljs-github-light.css')).text();
   const body = t.html || contentEl.innerHTML;
@@ -3080,7 +3117,7 @@ async function buildStandaloneHtml(t) {
 <style>${cssMd}
 ${cssHl}
 body{margin:0;background:${dark ? '#0d1117' : '#ffffff'};}
-.markdown-body{max-width:860px;margin:0 auto;padding:48px 32px;}</style>
+.markdown-body{max-width:860px;margin:0 auto;padding:48px 32px;${opts.size ? `font-size:${opts.size}px;` : ''}${FONT_STACKS[opts.font] ? `font-family:${FONT_STACKS[opts.font]};` : ''}}</style>
 </head><body><article class="markdown-body">${body}</article></body></html>`;
 }
 
@@ -3175,13 +3212,29 @@ const EXPORT_FORMATS = [
   { id: 'png', label: 'Image', desc: 'PNG of the page', icon: 'doc', soon: true },
   { id: 'epub', label: 'EPUB', desc: 'E-reader book', icon: 'book', pandoc: true, soon: true },
 ];
-const exportState = { fmt: 'pdf' };
+const exportState = { fmt: 'pdf', font: 'current', size: 16, margin: 'normal', header: '', footer: '' };
+const FONT_STACKS = {
+  system: "'Hanken Grotesk', -apple-system, sans-serif",
+  serif: "'Newsreader', Georgia, serif",
+  mono: "'Geist Mono', ui-monospace, monospace",
+};
 
 function openExportDialog() {
   const t = activeTab();
   if (!t) return;
   const avail = EXPORT_FORMATS.filter(f => !f.soon && (!f.when || f.when(t)));
   exportState.fmt = (t.kind === 'sheet') ? 'csv' : (avail[0] ? avail[0].id : 'md');
+  // restore last-used typography/layout; header & footer start fresh per doc
+  const prefs = settings.exportPrefs || {};
+  exportState.font = prefs.font || 'current';
+  exportState.size = prefs.size || settings.fontSize || 16;
+  exportState.header = ''; exportState.footer = '';
+  $('exp-header').value = ''; $('exp-footer').value = '';
+  document.querySelectorAll('#exp-font button').forEach(b => b.classList.toggle('sel', b.dataset.v === exportState.font));
+  document.querySelectorAll('#exp-margin button').forEach(b => b.classList.toggle('sel', b.dataset.v === (prefs.margin || 'normal')));
+  document.querySelectorAll('#exp-page button').forEach(b => b.classList.toggle('sel', b.dataset.v === (prefs.page || 'a4')));
+  buildHfChips('exp-header-chips', 'exp-header');
+  buildHfChips('exp-footer-chips', 'exp-footer');
   // format list — only formats that apply to this document kind
   const fl = $('export-formats'); fl.innerHTML = '';
   for (const f of EXPORT_FORMATS) {
@@ -3197,22 +3250,57 @@ function openExportDialog() {
   syncExportDialog();
 }
 
+// Auto-suggestions for header/footer — resolved from the open document
+function exportSuggestions() {
+  const t = activeTab();
+  const list = [];
+  const h1 = contentEl.querySelector('h1');
+  if (h1 && h1.textContent.trim()) list.push({ label: 'Title', value: h1.textContent.trim() });
+  if (t) list.push({ label: 'File name', value: stem(t.name) });
+  list.push({ label: 'Date', value: new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' }) });
+  if (settings.profileName) list.push({ label: settings.profileName, value: settings.profileName });
+  list.push({ label: 'Confidential', value: 'Confidential' });
+  return list;
+}
+
+function buildHfChips(chipsId, inputId) {
+  const host = $(chipsId); host.innerHTML = '';
+  for (const s of exportSuggestions()) {
+    const b = document.createElement('button');
+    b.className = 'exp-chip'; b.textContent = s.label; b.title = s.value;
+    b.addEventListener('click', () => {
+      const input = $(inputId);
+      input.value = input.value.trim() ? input.value.trim() + '  ·  ' + s.value : s.value;
+      exportState[inputId === 'exp-header' ? 'header' : 'footer'] = input.value;
+    });
+    host.appendChild(b);
+  }
+}
+
 function syncExportDialog() {
   const t = activeTab();
   $('export-formats').querySelectorAll('.exp-fmt').forEach(b => b.classList.toggle('sel', b.dataset.fmt === exportState.fmt));
   const isPdf = exportState.fmt === 'pdf';
   const isHtmlish = exportState.fmt === 'pdf' || exportState.fmt === 'html';
   $('exp-theme-group').style.display = isHtmlish ? '' : 'none';
+  $('exp-font-group').style.display = isHtmlish ? '' : 'none';
+  $('exp-size-group').style.display = isHtmlish ? '' : 'none';
   $('exp-page-group').style.display = isPdf ? '' : 'none';
+  $('exp-margin-group').style.display = isPdf ? '' : 'none';
+  $('exp-hf-group').style.display = isPdf ? '' : 'none';
   $('export-preview').style.display = isHtmlish ? '' : 'none';
   const f = EXPORT_FORMATS.find(x => x.id === exportState.fmt);
   $('exp-note').textContent = f.pandoc ? 'Needs the optional pandoc helper for full fidelity.' : '';
   $('export-dest').textContent = `${stem(t.name)}.${exportState.fmt === 'md' ? 'md' : exportState.fmt}`;
-  // live preview (mini render of the doc)
+  $('exp-fs-val').textContent = exportState.size + 'px';
+  // live preview (mini render of the doc) — reflects font + size choices
   if (isHtmlish) {
     const inner = $('export-preview-inner');
     inner.className = 'markdown-body';
     inner.innerHTML = (t.html || contentEl.innerHTML || '').slice(0, 4000);
+    const fam = FONT_STACKS[exportState.font] || '';
+    inner.style.fontFamily = fam;
+    inner.style.fontSize = exportState.size + 'px';
   }
 }
 
@@ -3220,20 +3308,33 @@ function wireExportDialog() {
   $('export-close').addEventListener('click', () => { $('export-overlay').hidden = true; });
   $('export-cancel').addEventListener('click', () => { $('export-overlay').hidden = true; });
   $('export-overlay').addEventListener('mousedown', (e) => { if (e.target === $('export-overlay')) $('export-overlay').hidden = true; });
-  document.querySelectorAll('#exp-theme button, #exp-page button').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('#exp-theme button, #exp-page button, #exp-font button, #exp-margin button').forEach(b => b.addEventListener('click', () => {
     b.parentElement.querySelectorAll('button').forEach(x => x.classList.remove('sel')); b.classList.add('sel');
+    if (b.parentElement.id === 'exp-font') { exportState.font = b.dataset.v; syncExportDialog(); }
   }));
+  $('exp-fs-minus').addEventListener('click', () => { exportState.size = Math.max(10, exportState.size - 1); syncExportDialog(); });
+  $('exp-fs-plus').addEventListener('click', () => { exportState.size = Math.min(22, exportState.size + 1); syncExportDialog(); });
+  $('exp-header').addEventListener('input', (e) => { exportState.header = e.target.value; });
+  $('exp-footer').addEventListener('input', (e) => { exportState.footer = e.target.value; });
   $('export-go').addEventListener('click', () => {
     const fmt = exportState.fmt;
-    const theme = document.querySelector('#exp-theme .sel')?.dataset.v || 'light';
-    const page = document.querySelector('#exp-page .sel')?.dataset.v || 'a4';
+    const opts = {
+      theme: document.querySelector('#exp-theme .sel')?.dataset.v || 'light',
+      page: document.querySelector('#exp-page .sel')?.dataset.v || 'a4',
+      margin: document.querySelector('#exp-margin .sel')?.dataset.v || 'normal',
+      font: exportState.font, size: exportState.size,
+      header: exportState.header.trim(), footer: exportState.footer.trim(),
+    };
+    // remember for next time
+    settings.exportPrefs = { font: opts.font, size: opts.size, margin: opts.margin, page: opts.page };
+    saveSettings();
     $('export-overlay').hidden = true;
-    if (fmt === 'pdf') appPrint({ theme, page });
-    else exportActive(fmt);
+    if (fmt === 'pdf') appPrint(opts);
+    else exportActive(fmt, opts);
   });
 }
 
-async function exportActive(fmt) {
+async function exportActive(fmt, opts = {}) {
   const t = activeTab();
   if (!t) return;
   if (fmt === 'docx' || fmt === 'epub' || fmt === 'png') { toast('“' + fmt.toUpperCase() + '” export needs the pandoc helper (coming soon)'); return; }
@@ -3251,7 +3352,7 @@ async function exportActive(fmt) {
       const source = t.kind === 'pdf'
         ? { ...t, html: DOMPurify.sanitize(md.render(await pdfToMarkdown(t))) }
         : t;
-      result = await saveTextAs(await buildStandaloneHtml(source), stem(t.name) + '.html');
+      result = await saveTextAs(await buildStandaloneHtml(source, opts), stem(t.name) + '.html');
     } else if (fmt === 'csv') {
       if (t.kind !== 'sheet' || !t.bytes) { toast('CSV export works on spreadsheets only'); return; }
       const wb = XLSX.read(t.bytes, { type: 'array' });

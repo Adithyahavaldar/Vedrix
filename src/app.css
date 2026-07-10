@@ -91,13 +91,24 @@ body.mac #topbar { padding-left: 84px; } /* room for macOS traffic lights (overl
 #ctx-saved.dirty { color: var(--text-muted); }
 #ctx-saved.dirty svg { display: none; }
 body.editing #context-bar, body.rich-editing #context-bar { display: none; }
-/* segmented control (also used in settings) */
-.seg { display: inline-flex; background: var(--panel2); border-radius: 8px; padding: 2px; }
+/* segmented control — pill style, one definition for the whole app
+   (context bar Read/Edit, settings, export dialog) */
+.seg {
+  display: inline-flex; align-items: center; gap: 2px;
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  border-radius: 999px; padding: 3px;
+}
 .seg button {
   border: none; background: transparent; color: var(--text-muted);
-  font: inherit; font-size: 11.5px; padding: 4px 12px; border-radius: 6px; cursor: pointer;
+  font: inherit; font-size: 12px; line-height: 1.2;
+  padding: 5px 13px; border-radius: 999px; cursor: pointer;
+  transition: color .12s;
 }
-.seg button.sel { background: var(--card); color: var(--accent); font-weight: 600; }
+.seg button:hover:not(.sel) { color: var(--fg); }
+.seg button.sel {
+  background: var(--panel); color: var(--fg); font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0,0,0,.22);
+}
 
 #open-btn {
   font-size: 13px; font-weight: 600;
@@ -756,19 +767,6 @@ body.dragover::after {
 #type-preview code { font: inherit; font-family: 'Geist Mono', monospace; font-size: calc(var(--reader-fs, 16px) * .9); background: var(--card); padding: 2px 6px; border-radius: 5px; }
 #type-preview.tp-serif h4, #type-preview.tp-serif p { font-family: 'Newsreader', Georgia, serif; }
 #type-preview.tp-mono h4, #type-preview.tp-mono p { font-family: 'Geist Mono', monospace; }
-.seg {
-  display: inline-flex;
-  border: 1px solid var(--border); border-radius: 8px;
-  overflow: hidden;
-}
-.seg button {
-  font: inherit; font-size: 12.5px;
-  padding: 6px 14px;
-  border: none; background: transparent; color: var(--text-muted);
-  cursor: pointer;
-}
-.seg button + button { border-left: 1px solid var(--border); }
-.seg button.sel { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); font-weight: 600; }
 .setting-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 10px 0; font-size: 13.5px; }
 .setting-row label { flex: 0 0 auto; }
 .setting-row input[type="text"],
@@ -1208,8 +1206,25 @@ body.editing #scroller { flex: 1; }
 .exp-tag { font: 600 9px 'Geist Mono', monospace; text-transform: uppercase; color: var(--text-muted); background: var(--hover); padding: 2px 6px; border-radius: 5px; }
 .exp-tag.soon { color: var(--accent); }
 #export-options { padding: 16px; border-right: 1px solid var(--border); overflow-y: auto; }
+#export-options .seg button { padding: 5px 9px; font-size: 11.5px; }
 .exp-opt-group { margin-bottom: 16px; }
 .exp-opt-group label { display: block; font-size: 11.5px; font-weight: 600; color: var(--text-muted); margin-bottom: 6px; }
+/* header / footer fields + auto-suggestion chips */
+.exp-hf label { display: block; font-size: 11.5px; font-weight: 600; color: var(--text-muted); margin: 14px 0 6px; }
+.exp-hf label em { font-style: normal; font-weight: 500; opacity: .75; }
+.exp-hf input {
+  width: 100%; font: inherit; font-size: 12.5px;
+  padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg); color: var(--fg); outline: none;
+}
+.exp-hf input:focus { border-color: var(--accent); }
+.exp-chips { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 6px; }
+.exp-chip {
+  font: inherit; font-size: 10.5px; padding: 3px 9px;
+  border: 1px solid var(--border); border-radius: 12px;
+  background: transparent; color: var(--text-muted); cursor: pointer;
+}
+.exp-chip:hover { border-color: var(--accent); color: var(--accent); }
 .exp-check { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 10px; cursor: pointer; }
 .exp-check input { width: 15px; height: 15px; accent-color: var(--accent); }
 .exp-note { font-size: 11px; color: var(--text-muted); margin-top: 8px; line-height: 1.4; }
@@ -1373,7 +1388,17 @@ body.rich-editing #scroller { box-shadow: inset 0 0 0 2px color-mix(in srgb, var
   html, body, #main, #scroller { display: block !important; height: auto !important; overflow: visible !important; }
   body { background: #fff !important; }
   .markdown-body { max-width: 100% !important; padding: 0 !important; }
+  /* header (masthead) and footer (closing line) flow with the content */
+  .print-run {
+    display: block !important;
+    font: 500 10px 'Geist Mono', ui-monospace, monospace;
+    letter-spacing: .03em; color: #57606a; text-align: center;
+  }
+  .print-run-top { margin: 0 0 18px; padding-bottom: 8px; border-bottom: 1px solid #d0d7de; }
+  .print-run-bot { margin: 22px 0 0; padding-top: 8px; border-top: 1px solid #d0d7de; }
 }
+/* print-only furniture — hidden on screen only (must NOT leak into @media print) */
+@media screen { .print-run { display: none; } }
 
 /* ============================================================
    Overflow menu (mobile) + shared bits
