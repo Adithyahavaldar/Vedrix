@@ -1,0 +1,15 @@
+{
+  "name": "sutra-canvas-build",
+  "private": true,
+  "type": "module",
+  "description": "One-time build tooling to vendor Excalidraw as a standalone IIFE for Sutra's no-bundler runtime. NOT part of the app.",
+  "scripts": {
+    "build": "node build-canvas.mjs"
+  },
+  "dependencies": {
+    "@excalidraw/excalidraw": "^0.18.1",
+    "esbuild": "^0.28.1",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  }
+}

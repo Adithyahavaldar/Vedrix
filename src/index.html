@@ -11,8 +11,8 @@
 <link rel="stylesheet" href="vendor/fonts/fonts.css">
 <link rel="stylesheet" href="vendor/katex.min.css">
 <link rel="stylesheet" href="vendor/codemirror.css">
-<link rel="stylesheet" href="app.css?v=141">
-<link rel="stylesheet" href="themes.css?v=141">
+<link rel="stylesheet" href="app.css?v=142">
+<link rel="stylesheet" href="themes.css?v=142">
 </head>
 <body>
   <div id="topbar" data-tauri-drag-region>
@@ -250,7 +250,10 @@
       <div id="home-scroll">
         <header id="home-head">
           <div><h1 id="home-greeting">Good day</h1><p id="home-sub"></p></div>
-          <button id="home-new" class="btn-accent">＋ New document</button>
+          <div class="home-head-actions">
+            <button id="home-new-canvas" class="btn-ghost">＋ New canvas</button>
+            <button id="home-new" class="btn-accent">＋ New document</button>
+          </div>
         </header>
         <section class="home-section">
           <div class="home-sec-head"><span>PROJECTS</span><button id="home-new-proj" class="home-link">＋ New project</button></div>
@@ -315,6 +318,8 @@
         <button id="map-export-outline" class="icon-btn" title="Export as Markdown outline">Outline</button>
       </div>
     </div>
+
+    <div id="canvasview" hidden></div>
 
     <div id="unsupported" hidden>
       <div class="big">🗂️</div>
@@ -546,6 +551,6 @@
   window.pdfjsLib = pdfjsLib;
   window.dispatchEvent(new Event('pdfjs-ready'));
 </script>
-<script src="app.js?v=141"></script>
+<script src="app.js?v=142"></script>
 </body>
 </html>

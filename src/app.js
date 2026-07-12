@@ -220,6 +220,7 @@ function kindOf(name) {
   if (ext === 'pptx') return 'pptx';
   if (['xlsx', 'xls', 'csv', 'tsv'].includes(ext)) return 'sheet';
   if (['html', 'htm'].includes(ext)) return 'html';
+  if (['excalidraw', 'canvas'].includes(ext)) return 'canvas';
   if (['txt', 'log', 'json', 'js', 'ts', 'py', 'sh', 'yaml', 'yml', 'toml', 'xml', 'rs', 'css'].includes(ext)) return 'text';
   return 'unsupported';
 }
@@ -239,6 +240,7 @@ const FORMAT_BADGE = {
   pptx: { label: 'PPT', color: '#c8912a' },
   sheet:{ label: 'XLS', color: '#3f8f5a' },
   text: { label: 'TXT', color: '#8a7f6d' },
+  canvas:{ label: 'CNV', color: '#6d5ac2' },
   unsupported: { label: '?', color: '#8a7f6d' },
 };
 function badgeFor(kind) { return FORMAT_BADGE[kind] || FORMAT_BADGE.text; }
@@ -367,8 +369,10 @@ function showPane(pane) {
   unsupportedEl.hidden = pane !== 'unsupported';
   $('mapview').hidden = pane !== 'map';
   $('graphview').hidden = pane !== 'graph';
+  $('canvasview').hidden = pane !== 'canvas';
   $('home').hidden = pane !== 'home';
-  $('sidebar').style.display = pane === 'home' ? 'none' : '';
+  // the canvas owns its full pane — hide the doc sidebar (no TOC/outline for it)
+  $('sidebar').style.display = (pane === 'home' || pane === 'canvas') ? 'none' : '';
 }
 
 function slugify(text, used) {
@@ -602,6 +606,7 @@ function wireHome() {
     else if (nav2 === 'settings') { hideHome(); $('settings-overlay').hidden = false; }
   });
   $('home-new').addEventListener('click', () => { hideHome(); openViaPicker(); });
+  $('home-new-canvas').addEventListener('click', () => newCanvas());
   $('home-new-proj').addEventListener('click', () => openProjectModal((id) => { projectsOpen.add(id); renderHome(); }));
   $('home-open').addEventListener('click', () => { hideHome(); openViaPicker(); });
   $('home-open-folder').addEventListener('click', () => { hideHome(); if (typeof openFolder === 'function') openFolder(); });
@@ -1008,8 +1013,8 @@ function renderActive() {
     rb.innerHTML = '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M12 16v4M8 20h8"/></svg>';
     rb.title = 'Present (full-screen slideshow)';
   }
-  $('map-btn').hidden = !(t && t.kind !== 'unsupported');
-  $('export-btn').hidden = !(t && t.kind !== 'unsupported');
+  $('map-btn').hidden = !(t && t.kind !== 'unsupported' && t.kind !== 'canvas');
+  $('export-btn').hidden = !(t && t.kind !== 'unsupported' && t.kind !== 'canvas');
   markActiveFile();
   if (!$('ai-panel').hidden) renderAiChat();
   if (graphOpen && folder) { renderGraph(); return; }
@@ -1032,6 +1037,13 @@ function renderActive() {
     $('unsupported-name').textContent = t.name;
     $('open-external').hidden = !(TAURI && t.path);
     showPane('unsupported');
+    return;
+  }
+
+  if (t.kind === 'canvas') {
+    clearToc();
+    applyRichState(null);
+    renderCanvas(t);
     return;
   }
 
@@ -1636,6 +1648,8 @@ async function makeTab(base, kind, { text, bytes }) {
   const tab = { ...base, kind, live: kind !== 'unsupported' };
   if (PAGED_KINDS.includes(kind)) {
     tab.bytes = bytes;
+  } else if (kind === 'canvas') {
+    tab.scene = parseScene(text);             // Excalidraw JSON; blank if unreadable
   } else if (kind === 'html') {
     tab.rawHtml = text;                       // rendered in a sandboxed frame
     tab.html = DOMPurify.sanitize(text);      // for TOC / mind map / export
@@ -2300,6 +2314,7 @@ const ICON_PATHS = {
   doc: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/>',
   present: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M12 16v4M8 20h8"/>',
   layers: '<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/>',
+  canvas: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M9 9v11"/>',
 };
 function svgIcon(name, filled) {
   return `<svg viewBox="0 0 24 24">${ICON_PATHS[name] || ''}</svg>`.replace('<svg ', filled ? '<svg data-filled ' : '<svg ');
@@ -2313,6 +2328,7 @@ function cmdActions() {
   const t = activeTab();
   const list = [
     { id: 'newtab', label: 'Open a document', hint: '⌘O', icon: 'plus', run: openViaPicker },
+    { id: 'new-canvas', label: 'New canvas', hint: '', icon: 'canvas', run: () => { closeCmd(); newCanvas(); } },
     { id: 'find', label: 'Find in document', hint: '⌘F', icon: 'find', run: () => { closeCmd(); openFind(); } },
   ];
   if (t && (t.kind === 'md' || t.kind === 'text')) list.push({ id: 'edit', label: t.editing ? 'Stop editing' : 'Edit document', hint: '⌘E', icon: 'pencil', run: () => { closeCmd(); toggleEdit(); } });
@@ -2980,6 +2996,104 @@ async function saveEditor(t) {
   } catch (err) {
     console.error('save failed', err);
   }
+}
+
+/* ---------- Freeform canvas (Excalidraw, lazy-loaded) ---------- */
+
+function blankScene() { return { type: 'excalidraw', version: 2, source: 'sutra', elements: [], appState: {}, files: {} }; }
+function parseScene(text) {
+  if (!text) return blankScene();
+  try { const s = JSON.parse(text); if (s && Array.isArray(s.elements)) return s; } catch (_) {}
+  return blankScene();
+}
+function canvasTheme() {
+  const th = THEMES.find(x => x.key === settings.theme) || THEMES[0];
+  const base = th.base === 'system' ? (sysDark.matches ? 'dark' : 'light') : th.base;
+  return base === 'dark' ? 'dark' : 'light';
+}
+
+// The 8 MB Excalidraw bundle loads only when a canvas is first opened — normal
+// document reading never pays for it.
+let _canvasLibP = null;
+function ensureCanvasLib() {
+  if (window.SutraCanvas) return Promise.resolve();
+  if (_canvasLibP) return _canvasLibP;
+  _canvasLibP = new Promise((resolve, reject) => {
+    const link = document.createElement('link');
+    link.rel = 'stylesheet'; link.href = 'vendor/excalidraw.bundle.css';
+    document.head.appendChild(link);
+    const s = document.createElement('script');
+    s.src = 'vendor/excalidraw.bundle.js';
+    s.onload = () => window.SutraCanvas ? resolve() : reject(new Error('bundle loaded but SutraCanvas missing'));
+    s.onerror = () => reject(new Error('failed to load canvas bundle'));
+    document.body.appendChild(s);
+  });
+  return _canvasLibP;
+}
+
+let _canvasTabId = null;          // which canvas tab is currently mounted
+let _canvasSuppressUntil = 0;     // ignore Excalidraw's onChange bursts right after (re)load
+async function renderCanvas(t) {
+  showPane('canvas');
+  try { await ensureCanvasLib(); } catch (e) { toast('Canvas failed to load'); console.error(e); return; }
+  if (activeId !== t.id) return;
+  const host = $('canvasview');
+  _canvasSuppressUntil = Date.now() + 800;
+  if (!window.__canvasMounted) {
+    window.SutraCanvas.mount(host, t.scene, { theme: canvasTheme(), onChange: onCanvasChange });
+    window.__canvasMounted = true;
+  } else if (_canvasTabId !== t.id) {
+    window.SutraCanvas.load(t.scene);
+  }
+  window.SutraCanvas.setTheme(canvasTheme());
+  _canvasTabId = t.id;
+}
+
+function onCanvasChange() {
+  if (Date.now() < _canvasSuppressUntil) return;
+  const t = tabs.find(x => x.id === _canvasTabId);
+  if (!t) return;
+  t.scene = window.SutraCanvas.getScene();
+  setDirty(t, true);
+  if (TAURI && t.path) {                        // autosave only once it has a home
+    clearTimeout(t._canvasSaveTimer);
+    t._canvasSaveTimer = setTimeout(() => saveCanvas(t), 1000);
+  }
+}
+
+async function saveCanvas(t) {
+  if (!(TAURI && t.path)) return saveCanvasAs(t);
+  try {
+    const scene = (t.id === _canvasTabId && window.SutraCanvas) ? window.SutraCanvas.getScene() : t.scene;
+    t.scene = scene;
+    t.mtime = await TAURI.core.invoke('write_file', { path: t.path, contents: JSON.stringify(scene) });
+    setDirty(t, false);
+  } catch (err) { console.error('canvas save failed', err); toast('Canvas save failed'); }
+}
+
+// First save of a new canvas: pick a location, then autosave to it thereafter.
+async function saveCanvasAs(t) {
+  const scene = (t.id === _canvasTabId && window.SutraCanvas) ? window.SutraCanvas.getScene() : t.scene;
+  t.scene = scene;
+  const json = JSON.stringify(scene);
+  const suggested = (t.name || 'Canvas').replace(/\.(excalidraw|canvas)$/i, '') + '.excalidraw';
+  if (TAURI) {
+    try {
+      const path = await TAURI.core.invoke('plugin:dialog|save', { options: { defaultPath: suggested } });
+      if (!path) return false;
+      t.mtime = await TAURI.core.invoke('write_file', { path, contents: json });
+      t.path = path; t.name = path.split('/').pop();
+      setDirty(t, false); renderTabStrip(); recordRecent(t.name, t.path); saveSession();
+      return true;
+    } catch (err) { console.error(err); toast('Canvas save failed'); return false; }
+  }
+  await saveTextAs(json, suggested);            // browser fallback: download
+  return true;
+}
+
+function newCanvas() {
+  hideHome();
+  addTab({ name: 'Untitled canvas.excalidraw', kind: 'canvas', live: true, scene: blankScene(), path: null });
 }
 
 /* ---------- Export / convert ---------- */
@@ -3990,7 +4104,7 @@ function buildTopicTree(t) {
 
 function toggleMap() {
   const t = activeTab();
-  if (!t || t.kind === 'unsupported') return;
+  if (!t || t.kind === 'unsupported' || t.kind === 'canvas') return;
   t.viewMode = t.viewMode === 'map' ? 'read' : 'map';
   renderActive();
 }
@@ -4396,6 +4510,10 @@ function wireGlobal() {
     else if (mod && e.key === 'e') { e.preventDefault(); toggleEdit(); }
     else if (mod && e.key === 'm' && !e.altKey) { e.preventDefault(); toggleMap(); }
     else if (mod && e.key === 'p') { e.preventDefault(); appPrint(); }
+    else if (mod && e.key === 's') {
+      const t = activeTab();
+      if (t && t.kind === 'canvas') { e.preventDefault(); saveCanvas(t); }
+    }
     else if (mod && e.key === 'b') {
       e.preventDefault();
       if (isRichEditing()) EDITOR_CMDS.bold(); else toggleSidebar();
