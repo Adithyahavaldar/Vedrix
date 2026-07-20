@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>Sutra</title>
+<title>Vedrix</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'%3E%3Crect width='120' height='120' rx='28' fill='%232f6bff'/%3E%3Cg transform='translate(0.4 -16.6) scale(0.098)' fill='%23fff' stroke='%23fff' stroke-width='24' stroke-linejoin='round' stroke-linecap='round'%3E%3Cpath d='M175 482 L388 482 L540 792 L675 843 L675 858 L598 858 L585 1082 L470 1082 Z'/%3E%3Cpath d='M802 604 L1042 604 L936 850 L726 850 Z'/%3E%3C/g%3E%3C/svg%3E">
 <link rel="stylesheet" href="vendor/github-markdown-light.css" id="css-md-light">
 <link rel="stylesheet" href="vendor/github-markdown-dark.css" id="css-md-dark" disabled>
 <link rel="stylesheet" href="vendor/hljs-github-light.css" id="css-hl-light">
@@ -11,8 +12,8 @@
 <link rel="stylesheet" href="vendor/fonts/fonts.css">
 <link rel="stylesheet" href="vendor/katex.min.css">
 <link rel="stylesheet" href="vendor/codemirror.css">
-<link rel="stylesheet" href="app.css?v=142">
-<link rel="stylesheet" href="themes.css?v=142">
+<link rel="stylesheet" href="app.css?v=166">
+<link rel="stylesheet" href="themes.css?v=166">
 </head>
 <body>
   <div id="topbar" data-tauri-drag-region>
@@ -105,9 +106,38 @@
     <button data-cmd="code" title="Inline code" class="tb-mono">&lt;/&gt;</button>
     <button data-cmd="highlight" title="Highlight"><mark style="padding:0 3px">H</mark></button>
     <button data-cmd="link" class="sb-ic" title="Link (⌘K)"><svg viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 6 .5l3-3a4 4 0 0 0-6-6l-1.5 1.5M14 10a4 4 0 0 0-6-.5l-3 3a4 4 0 0 0 6 6l1.5-1.5"/></svg></button>
+    <span class="sb-div"></span>
+    <button id="sb-ai" class="sb-ai" title="AI actions & rewrite"><svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 2l1.9 6.1L20 10l-6.1 1.9L12 18l-1.9-6.1L4 10l6.1-1.9z"/></svg> AI</button>
+  </div>
+
+  <div id="sel-menu" hidden>
+    <div class="sm-label">Actions</div>
+    <button data-act="copy"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/></svg> Copy the text</button>
+    <button data-act="translate"><svg viewBox="0 0 24 24"><path d="M4 5h9M9 3v2M6 5s0 6-4 9M5 9c0 3 4 5 6 5"/><path d="M13 20l4-9 4 9M14.5 17h5"/></svg> Translate it</button>
+    <button data-act="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg> Search the web</button>
+    <div class="sm-label">Rewrite <span class="sm-ai">AI</span></div>
+    <button data-rw="grammar"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h10M4 17h7"/><path d="M15 16l2 2 4-4"/></svg> Fix grammar</button>
+    <button data-rw="positive"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01"/></svg> Rewrite in a positive tone</button>
+    <button data-rw="punchier"><svg viewBox="0 0 24 24"><path d="M13 3L5 13h6l-1 8 8-10h-6z"/></svg> Make it punchier</button>
+    <button data-rw="shorter"><svg viewBox="0 0 24 24"><path d="M4 8h16M4 12h10M4 16h6"/></svg> Make it shorter</button>
+    <button data-rw="longer"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 10h16M4 14h16M4 18h12"/></svg> Make it longer</button>
   </div>
 
   <div id="slash-menu" hidden></div>
+
+  <div id="hl-pop" hidden>
+    <button class="hl-sw" data-color="yellow" style="background:#ffd43b" title="Yellow"></button>
+    <button class="hl-sw" data-color="green" style="background:#8ce99a" title="Green"></button>
+    <button class="hl-sw" data-color="blue" style="background:#74c0fc" title="Blue"></button>
+    <button class="hl-sw" data-color="pink" style="background:#faa2c1" title="Pink"></button>
+    <button class="hl-sw" data-color="orange" style="background:#ffc078" title="Orange"></button>
+    <span class="hl-div"></span>
+    <button class="hl-act" data-act="note" title="Add a note"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/></svg></button>
+    <button class="hl-act hl-rm" data-act="remove" title="Remove highlight"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </div>
+  <div id="hl-note-pop" hidden>
+    <textarea id="hl-note-text" placeholder="Write a note…" spellcheck="false" rows="3"></textarea>
+  </div>
 
   <div id="project-overlay" hidden>
     <div id="project-card">
@@ -236,7 +266,7 @@
 
   <div id="main">
     <nav id="nav-rail" hidden>
-      <button class="nr-mark" id="nr-home2" title="Home">S</button>
+      <button class="nr-mark" id="nr-home2" title="Home"><svg viewBox="150 455 930 660"><g fill="currentColor" stroke="currentColor" stroke-width="24" stroke-linejoin="round" stroke-linecap="round"><path d="M175 482 L388 482 L540 792 L675 843 L675 858 L598 858 L585 1082 L470 1082 Z"/><path d="M802 604 L1042 604 L936 850 L726 850 Z"/></g></svg></button>
       <button class="nr-btn" data-nav="home" title="Home"><svg viewBox="0 0 24 24"><path d="M4 11l8-6 8 6v8a1 1 0 0 1-1 1h-5v-6h-4v6H5a1 1 0 0 1-1-1z"/></svg></button>
       <button class="nr-btn" data-nav="files" title="Files"><svg viewBox="0 0 24 24"><rect x="8" y="3" width="13" height="14" rx="2"/><path d="M4 7v10a4 4 0 0 0 4 4h9"/></svg></button>
       <button class="nr-btn" data-nav="projects" title="Projects"><svg viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></svg></button>
@@ -267,7 +297,7 @@
           <aside class="home-side">
             <div class="home-ai-card" id="home-ai">
               <div class="home-ai-icon"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.9 6.1L20 10l-6.1 1.9L12 18l-1.9-6.1L4 10l6.1-1.9z"/></svg></div>
-              <div><div class="home-ai-title">Sutra AI</div><div class="home-ai-sub">Summarize, chat, and map any open document.</div></div>
+              <div><div class="home-ai-title">Vedrix AI</div><div class="home-ai-sub">Summarize, chat, and map any open document.</div></div>
             </div>
             <div class="home-import">
               <div class="home-sec-head"><span>GET DOCUMENTS IN</span></div>
@@ -281,13 +311,14 @@
 
     <div id="sidebar" class="hidden">
       <div id="side-tabs" hidden>
-        <button data-m="toc" class="sel">Contents</button><button data-m="files">Files</button>
+        <button data-m="toc" class="sel">Contents</button><button data-m="files">Files</button><button data-m="notes">Notes</button>
       </div>
       <nav id="toc"></nav>
       <div id="files-pane" hidden>
         <div id="projects"></div>
         <div id="filetree"></div>
       </div>
+      <div id="notes-pane" hidden></div>
     </div>
     <div id="toc-resize" title="Drag to resize sidebar"></div>
     <div class="scroll-thumb" id="thumb-scroller"></div>
@@ -329,8 +360,8 @@
     </div>
 
     <div id="empty">
-      <div class="empty-mark">S</div>
-      <h2 id="empty-title">Sutra</h2>
+      <div class="empty-mark"><svg viewBox="150 455 930 660"><g fill="currentColor" stroke="currentColor" stroke-width="24" stroke-linejoin="round" stroke-linecap="round"><path d="M175 482 L388 482 L540 792 L675 843 L675 858 L598 858 L585 1082 L470 1082 Z"/><path d="M802 604 L1042 604 L936 850 L726 850 Z"/></g></svg></div>
+      <h2 id="empty-title">Vedrix</h2>
       <p class="empty-sub">One quiet home for everything you read — Markdown, PDF, Word, PowerPoint, Excel &amp; text.</p>
       <div class="empty-actions">
         <button id="empty-open" class="btn-accent">Open a file</button>
@@ -371,7 +402,7 @@
     <aside id="ai-panel" hidden>
       <div id="ai-head">
         <span class="ai-head-tile"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.9 6.1L20 10l-6.1 1.9L12 18l-1.9-6.1L4 10l6.1-1.9z"/></svg></span>
-        <span class="ai-head-title">Sutra AI</span>
+        <span class="ai-head-title">Vedrix AI</span>
         <span class="ai-head-ctx">on this doc</span>
         <span class="spacer"></span>
         <button class="icon-btn" id="ai-close" title="Close (⌘J)">✕</button>
@@ -381,10 +412,100 @@
         <button class="ai-chip" id="ai-summarize">Summarize</button>
         <button class="ai-chip" id="ai-translate">Translate</button>
         <button class="ai-chip" id="ai-conceptmap">Concept map</button>
+        <button class="ai-chip" id="ai-board">Canvas board</button>
       </div>
       <div id="ai-input-row">
         <textarea id="ai-input" rows="1" placeholder="Ask about this document…"></textarea>
         <button id="ai-send" title="Send (Enter)"><svg viewBox="0 0 24 24"><path d="M12 20V5M6 11l6-6 6 6"/></svg></button>
+      </div>
+    </aside>
+
+    <aside id="editor-inspector" hidden>
+      <div class="insp-head">
+        <span class="insp-title">Editor</span>
+        <div class="insp-undo">
+          <button class="insp-ic" data-cmd="undo" title="Undo (⌘Z)"><svg viewBox="0 0 24 24"><path d="M9 7L4 12l5 5M4 12h11a5 5 0 0 1 0 10h-1"/></svg></button>
+          <button class="insp-ic" data-cmd="redo" title="Redo (⇧⌘Z)"><svg viewBox="0 0 24 24"><path d="M15 7l5 5-5 5M20 12H9a5 5 0 0 0 0 10h1"/></svg></button>
+        </div>
+      </div>
+
+      <div class="insp-scroll">
+        <section class="insp-sec">
+          <div class="insp-label">Style</div>
+          <div class="insp-styles">
+            <button class="insp-style" data-font="system" title="Sans-serif"><span class="is-aa" style="font-family:'Hanken Grotesk',system-ui,sans-serif">Aa</span><span class="is-name">Sans</span></button>
+            <button class="insp-style" data-font="serif" title="Serif"><span class="is-aa" style="font-family:'Newsreader',Georgia,serif">Aa</span><span class="is-name">Serif</span></button>
+            <button class="insp-style" data-font="mono" title="Monospace"><span class="is-aa" style="font-family:'Geist Mono',ui-monospace,monospace">Aa</span><span class="is-name">Mono</span></button>
+          </div>
+        </section>
+
+        <section class="insp-sec">
+          <div class="insp-label">Format</div>
+          <div class="insp-grid insp-format">
+            <button class="insp-btn" data-cmd="bold" title="Bold (⌘B)"><b>B</b></button>
+            <button class="insp-btn" data-cmd="italic" title="Italic (⌘I)"><i>I</i></button>
+            <button class="insp-btn" data-cmd="underline" title="Underline (⌘U)"><span style="text-decoration:underline">U</span></button>
+            <button class="insp-btn" data-cmd="strike" title="Strikethrough"><s>S</s></button>
+            <button class="insp-btn insp-mono" data-cmd="code" title="Inline code">&lt;/&gt;</button>
+            <button class="insp-btn" data-cmd="highlight" title="Highlight"><mark style="padding:0 3px">H</mark></button>
+            <button class="insp-btn insp-ic" data-cmd="link" title="Link (⌘K)"><svg viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 6 .5l3-3a4 4 0 0 0-6-6l-1.5 1.5M14 10a4 4 0 0 0-6-.5l-3 3a4 4 0 0 0 6 6l1.5-1.5"/></svg></button>
+          </div>
+        </section>
+
+        <section class="insp-sec">
+          <div class="insp-label">Paragraph</div>
+          <select id="insp-block" class="insp-select" title="Block type">
+            <option value="p">Paragraph</option>
+            <option value="h1">Heading 1</option>
+            <option value="h2">Heading 2</option>
+            <option value="h3">Heading 3</option>
+            <option value="h4">Heading 4</option>
+            <option value="blockquote">Quote</option>
+            <option value="pre">Code block</option>
+          </select>
+        </section>
+
+        <section class="insp-sec">
+          <div class="insp-label">Insert</div>
+          <div class="insp-grid insp-insert">
+            <button class="insp-btn insp-ic" data-cmd="image" title="Image"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.6"/><path d="M4 18l5-5 4 4 3-3 4 4"/></svg></button>
+            <button class="insp-btn insp-ic" data-cmd="table" title="Table"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M9 4v16"/></svg></button>
+            <button class="insp-btn insp-ic" data-cmd="ul" title="Bullet list"><svg viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1.2" fill="currentColor" stroke="none"/><circle cx="4.5" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="4.5" cy="18" r="1.2" fill="currentColor" stroke="none"/></svg></button>
+            <button class="insp-btn insp-ic" data-cmd="ol" title="Numbered list"><svg viewBox="0 0 24 24"><path d="M10 6h10M10 12h10M10 18h10M4 6V4l-1 .5M3 18h2l-1.5-2H5"/></svg></button>
+            <button class="insp-btn insp-ic" data-cmd="task" title="To-do checkbox"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="7" height="7" rx="1.5"/><path d="M4.5 7.5l1.5 1.5 2.5-3M14 7h6M14 17h6M3 15h7v5H3z"/></svg></button>
+            <button class="insp-btn insp-ic" data-cmd="hr" title="Divider"><svg viewBox="0 0 24 24"><path d="M4 12h16"/></svg></button>
+            <button class="insp-btn insp-ic" data-cmd="math" title="Math block"><svg viewBox="0 0 24 24"><path d="M5 5h9l-5 14M6 12h6"/></svg></button>
+            <button class="insp-btn insp-ic" data-cmd="mermaid" title="Diagram block"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="6" rx="1.5"/><rect x="14" y="15" width="7" height="6" rx="1.5"/><path d="M6.5 9v3a3 3 0 0 0 3 3h8"/></svg></button>
+          </div>
+        </section>
+
+        <section class="insp-sec">
+          <div class="insp-label">Text</div>
+          <div class="insp-row">
+            <span class="insp-row-name">Size</span>
+            <div class="insp-stepper">
+              <button id="insp-fs-minus" title="Smaller">−</button>
+              <span id="insp-fs-val">16px</span>
+              <button id="insp-fs-plus" title="Larger">+</button>
+            </div>
+          </div>
+          <div class="insp-row">
+            <span class="insp-row-name">Spacing</span>
+            <div class="insp-stepper">
+              <button id="insp-lh-minus" title="Tighter">−</button>
+              <span id="insp-lh-val">1.7</span>
+              <button id="insp-lh-plus" title="Looser">+</button>
+            </div>
+          </div>
+          <div class="insp-row">
+            <span class="insp-row-name">Width</span>
+            <div class="insp-seg" id="insp-width">
+              <button data-v="narrow" title="Narrow">▏</button>
+              <button data-v="normal" title="Normal">▎</button>
+              <button data-v="wide" title="Wide">▍</button>
+            </div>
+          </div>
+        </section>
       </div>
     </aside>
   </div>
@@ -527,7 +648,7 @@
   </div>
 
   <input type="file" id="file-input" multiple
-         accept=".md,.markdown,.mdown,.pdf,.docx,.pptx,.xlsx,.xls,.csv,.tsv,.txt,.log,.json,.html,.htm" hidden>
+         accept=".md,.markdown,.mdown,.pdf,.docx,.pptx,.xlsx,.xls,.csv,.tsv,.txt,.log,.json,.html,.htm,.excalidraw,.canvas" hidden>
 
 <script src="vendor/markdown-it.min.js"></script>
 <script src="vendor/markdown-it-task-lists.min.js"></script>
@@ -551,6 +672,6 @@
   window.pdfjsLib = pdfjsLib;
   window.dispatchEvent(new Event('pdfjs-ready'));
 </script>
-<script src="app.js?v=142"></script>
+<script src="app.js?v=166"></script>
 </body>
 </html>

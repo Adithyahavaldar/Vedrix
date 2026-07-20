@@ -20,6 +20,7 @@ Notes:
 **You cannot build a Windows binary on macOS** — Tauri needs the Windows toolchain + WebView2. Two ways to get one:
 
 1.  **CI (recommended):** push a tag `vX.Y.Z`; the GitHub Actions workflow (`.github/workflows/release.yml`) builds macOS (arm+intel), Windows `.msi`, and Linux `.deb`/AppImage, and attaches them to a draft Release.
+    
 2.  **On a Windows machine:**
     
     ```powershell
@@ -45,8 +46,11 @@ Signing (to avoid SmartScreen warnings): set an OV/EV cert. Azure Trusted Signin
 Prerequisites (this Mac currently has **Java 8 and no SDK** — all three needed):
 
 -   **JDK 17+** — `brew install openjdk@17` (Tauri’s Gradle needs 17, not 8).
+    
 -   **Android Studio** — installs the SDK + platform tools.
+    
 -   **Android SDK + NDK** — via Android Studio’s SDK Manager (NDK is under “SDK Tools”).
+    
 -   Env vars in your shell profile:
     
     ```bash
@@ -85,3 +89,7 @@ npx tauri ios build         # needs Apple Developer Program ($99/yr)
 3.  CI builds all platforms → draft GitHub Release.
 4.  Add signing secrets to the repo so installers are trusted (see workflow env).
 5.  Publish the release.
+
+  
+
+-

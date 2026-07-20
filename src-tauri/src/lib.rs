@@ -51,6 +51,13 @@ fn write_file(path: String, contents: String) -> Result<u64, String> {
     mtime_ms(&path)
 }
 
+/// Binary file write (e.g. canvas PNG export). Text goes through write_file.
+#[tauri::command]
+fn write_bytes(path: String, contents: Vec<u8>) -> Result<u64, String> {
+    std::fs::write(&path, contents).map_err(|e| e.to_string())?;
+    mtime_ms(&path)
+}
+
 /// Open the native print panel (WKWebView ignores window.print(), so the
 /// frontend calls this instead; "Save as PDF" lives in that panel).
 #[tauri::command]
@@ -182,6 +189,94 @@ fn list_dir_tree(path: String) -> Result<Vec<DirEntry>, String> {
     Ok(walk_dir(std::path::Path::new(&path), 0))
 }
 
+// --- Vault-wide content search (native = fast, non-blocking) ---
+#[derive(serde::Serialize)]
+struct SearchHit {
+    path: String,
+    name: String,
+    line: u32,       // 1-indexed line of the first match in the file
+    count: u32,      // total matches in the file
+    snippet: String, // the matching line, trimmed
+    col: u32,        // 0-indexed byte offset of the match within the snippet
+}
+
+// Only text-like files are grep-able; binary formats (pdf/docx/…) are skipped.
+const SEARCH_EXTS: [&str; 9] = ["md", "markdown", "mdown", "txt", "json", "log", "csv", "html", "htm"];
+
+fn search_walk(p: &std::path::Path, q: &str, depth: u32, out: &mut Vec<SearchHit>, cap: usize) {
+    if depth > 6 || out.len() >= cap {
+        return;
+    }
+    let Ok(rd) = std::fs::read_dir(p) else { return };
+    let mut items: Vec<_> = rd.flatten().collect();
+    items.sort_by_key(|e| (!e.path().is_dir(), e.file_name().to_ascii_lowercase()));
+    for e in items {
+        if out.len() >= cap {
+            return;
+        }
+        let path = e.path();
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') || name == "node_modules" || name == "target" || name == "vendor" {
+            continue;
+        }
+        if path.is_dir() {
+            search_walk(&path, q, depth + 1, out, cap);
+            continue;
+        }
+        let ext = path
+            .extension()
+            .and_then(|x| x.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if !SEARCH_EXTS.contains(&ext.as_str()) {
+            continue;
+        }
+        // skip anything over ~2 MB — huge files aren't what folks search for
+        if e.metadata().map(|m| m.len() > 2_000_000).unwrap_or(true) {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else { continue };
+        let mut count = 0u32;
+        let mut first: Option<(u32, String, u32)> = None;
+        for (i, raw) in text.lines().enumerate() {
+            let trimmed = raw.trim_start();
+            let tl = trimmed.to_lowercase();
+            if let Some(byte) = tl.find(q) {
+                count += 1;
+                if first.is_none() {
+                    // char offset (not byte) so highlights line up with accented text
+                    let col = tl[..byte].chars().count() as u32;
+                    let snip: String = trimmed.chars().take(200).collect();
+                    first = Some((i as u32 + 1, snip, col));
+                }
+            }
+        }
+        if let Some((line, snippet, col)) = first {
+            out.push(SearchHit {
+                path: path.to_string_lossy().into_owned(),
+                name,
+                line,
+                count,
+                snippet,
+                col,
+            });
+        }
+    }
+}
+
+#[tauri::command]
+fn search_folder(root: String, query: String) -> Result<Vec<SearchHit>, String> {
+    let q = query.trim().to_lowercase();
+    if q.len() < 2 {
+        return Ok(vec![]);
+    }
+    let mut hits = Vec::new();
+    search_walk(std::path::Path::new(&root), &q, 0, &mut hits, 300);
+    // most matches first, then alphabetical
+    hits.sort_by(|a, b| b.count.cmp(&a.count).then(a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    Ok(hits)
+}
+
 #[derive(serde::Serialize)]
 struct AiHttpResp {
     status: u16,
@@ -247,6 +342,8 @@ pub fn run() {
             take_pending_file,
             read_file_bytes,
             write_file,
+            write_bytes,
+            search_folder,
             print_page,
             save_export,
             read_library,
@@ -269,7 +366,7 @@ pub fn run() {
             #[cfg(desktop)]
             {
             let h = app.handle();
-            let app_menu = Submenu::with_items(h, "Sutra", true, &[
+            let app_menu = Submenu::with_items(h, "Vedrix", true, &[
                 &PredefinedMenuItem::about(h, None, Some(AboutMetadata::default()))?,
                 &PredefinedMenuItem::separator(h)?,
                 &MenuItem::with_id(h, "settings", "Settings…", true, Some("Cmd+,"))?,

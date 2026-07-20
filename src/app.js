@@ -72,6 +72,7 @@ const DEFAULT_SETTINGS = {
   width: 'normal',
   font: 'system',      // system | serif | mono
   fontSize: 16,
+  lineSpacing: 1.7,    // reader line-height
   profileName: '',
   restoreSession: true,
 };
@@ -104,7 +105,9 @@ function applySettings() {
   $('css-hl-dark').disabled = !dark;
   document.documentElement.style.setProperty('--reader-width', WIDTHS[settings.width] || WIDTHS.normal);
   document.documentElement.style.setProperty('--reader-fs', settings.fontSize + 'px');
+  document.documentElement.style.setProperty('--reader-lh', settings.lineSpacing || 1.7);
   renderSettingsUI();
+  if (!$('editor-inspector').hidden) syncInspector();
 }
 sysDark.addEventListener('change', applySettings);
 
@@ -271,7 +274,7 @@ function renderTabStrip() {
     el.querySelector('.tab-close').addEventListener('click', (e) => { e.stopPropagation(); closeTab(t.id); });
     strip.appendChild(el);
   }
-  document.title = activeTab() ? activeTab().name + ' — Sutra' : 'Sutra';
+  document.title = activeTab() ? activeTab().name + ' — Vedrix' : 'Vedrix';
 }
 
 /* drag a tab left/right to reorder */
@@ -438,8 +441,8 @@ async function loadLibrary() {
     if (TAURI) raw = await TAURI.core.invoke('read_library');
     else raw = localStorage.getItem('mv_library') || '';
     if (raw) library = JSON.parse(raw);
-    library.projects ||= []; library.assign ||= {}; library.tags ||= {};
-  } catch (_) { library = { projects: [], assign: {}, tags: {} }; }
+    library.projects ||= []; library.assign ||= {}; library.tags ||= {}; library.annotations ||= {};
+  } catch (_) { library = { projects: [], assign: {}, tags: {}, annotations: {} }; }
 }
 
 async function saveLibrary() {
@@ -710,6 +713,7 @@ function openTabAssignMenu(e, t) {
   }
   html += `<button data-p="__new"><span class="am-plus">+</span> New project…</button>`;
   if (cur) html += `<div class="am-sep"></div><button data-p="">Remove from project</button>`;
+  if (t.kind !== 'canvas') html += `<div class="am-sep"></div><button data-send-cv="1"><span class="am-plus">→</span> Send to canvas…</button>`;
   m.innerHTML = html;
   m.querySelectorAll('button[data-p]').forEach(btn => btn.addEventListener('click', () => {
     const v = btn.dataset.p;
@@ -717,6 +721,8 @@ function openTabAssignMenu(e, t) {
     if (v === '__new') openProjectModal((id) => assignToProject(t.path, id));
     else assignToProject(t.path, v || null);
   }));
+  const cvBtn = m.querySelector('button[data-send-cv]');
+  if (cvBtn) cvBtn.addEventListener('click', () => { m.hidden = true; sendDocToCanvas(t, e); });
   showMenuAt(m, e.clientX, e.clientY);
 }
 
@@ -772,13 +778,21 @@ async function addFileToProject(projId) {
 function updateSidebar() {
   const hasToc = !tocEl.classList.contains('hidden');
   const hasFiles = !!folder || library.projects.length > 0;
-  $('side-tabs').hidden = !hasFiles;
-  const mode = (sideMode === 'files' && hasFiles) ? 'files' : 'toc';
+  const hasNotes = canAnnotate(activeTab());
+  $('side-tabs').hidden = !(hasFiles || hasNotes);
+  const notesBtn = document.querySelector('#side-tabs button[data-m="notes"]');
+  if (notesBtn) notesBtn.hidden = !hasNotes;
+  let mode = sideMode;
+  if (mode === 'files' && !hasFiles) mode = 'toc';
+  if (mode === 'notes' && !hasNotes) mode = 'toc';
   tocEl.hidden = mode !== 'toc';
   $('files-pane').hidden = mode !== 'files';
   $('filetree').hidden = !folder;
+  $('notes-pane').hidden = mode !== 'notes';
+  if (mode === 'notes') renderNotesPane();
   document.querySelectorAll('#side-tabs button').forEach(b => b.classList.toggle('sel', b.dataset.m === mode));
-  $('sidebar').classList.toggle('hidden', sidebarCollapsed || (!hasToc && !hasFiles));
+  $('sidebar').classList.toggle('hidden', sidebarCollapsed || (!hasToc && !hasFiles && !hasNotes));
+  if (typeof reclampDocks === 'function') reclampDocks();   // freed/consumed width → re-fit both docks
 }
 
 function toggleSidebar() {
@@ -1014,7 +1028,7 @@ function renderActive() {
     rb.title = 'Present (full-screen slideshow)';
   }
   $('map-btn').hidden = !(t && t.kind !== 'unsupported' && t.kind !== 'canvas');
-  $('export-btn').hidden = !(t && t.kind !== 'unsupported' && t.kind !== 'canvas');
+  $('export-btn').hidden = !(t && t.kind !== 'unsupported');
   markActiveFile();
   if (!$('ai-panel').hidden) renderAiChat();
   if (graphOpen && folder) { renderGraph(); return; }
@@ -1077,6 +1091,7 @@ function renderActive() {
   contentEl.classList.remove('html-host');
   contentEl.innerHTML = t.html || '';
   fixupContent(t);
+  applyAnnotations(t);           // re-draw saved highlights/notes
   renderEnhancements(t).then(() => { if (activeId === t.id && ['md', 'docx', 'sheet'].includes(t.kind)) buildHeadingToc(); });
   if (['md', 'docx', 'sheet'].includes(t.kind)) buildHeadingToc(); else clearToc();
   applyZoom(t);
@@ -1635,7 +1650,7 @@ async function renderPptxSlide(zip, parse, path, cx, cy, naturalW, urls) {
 /* ---------- Opening files ---------- */
 
 async function loadTauriContent(kind, path) {
-  if (TEXT_KINDS.includes(kind) || kind === 'html') {
+  if (TEXT_KINDS.includes(kind) || kind === 'html' || kind === 'canvas') {
     const f = await TAURI.core.invoke('read_md_file', { path });
     return { text: f.text, mtime: f.mtime };
   }
@@ -1736,7 +1751,7 @@ async function openTauriPath(path) {
 
 async function openBrowserFile(file, handle) {
   const kind = kindOf(file.name);
-  const loaded = (TEXT_KINDS.includes(kind) || kind === 'html')
+  const loaded = (TEXT_KINDS.includes(kind) || kind === 'html' || kind === 'canvas')
     ? { text: await file.text() }
     : kind === 'unsupported' ? {} : { bytes: await file.arrayBuffer() };
   const tab = await makeTab({ name: file.name, handle, mtime: file.lastModified }, kind, loaded);
@@ -1749,7 +1764,7 @@ async function openViaPicker() {
     const picked = await TAURI.core.invoke('plugin:dialog|open', {
       options: {
         filters: [
-          { name: 'All supported', extensions: ['md', 'markdown', 'mdown', 'pdf', 'docx', 'pptx', 'xlsx', 'xls', 'csv', 'txt', 'log', 'json', 'html', 'htm'] },
+          { name: 'All supported', extensions: ['md', 'markdown', 'mdown', 'pdf', 'docx', 'pptx', 'xlsx', 'xls', 'csv', 'txt', 'log', 'json', 'html', 'htm', 'excalidraw', 'canvas'] },
           { name: 'Markdown', extensions: ['md', 'markdown', 'mdown'] },
         ],
         multiple: false,
@@ -1981,7 +1996,43 @@ function wireZoom() {
 let cm = null, cmSilent = false, previewTimer = null, saveTimer = null;
 
 function isEditable(t) {
-  return !!(t && TEXT_KINDS.includes(t.kind) && (t.path || (t.handle && t.handle.createWritable)));
+  return !!(t && TEXT_KINDS.includes(t.kind) && (t.path || (t.handle && t.handle.createWritable) || t.scratch));
+}
+
+// Save an in-memory (scratch) text doc to a real file, then it autosaves normally.
+async function saveDocAs(t) {
+  const json = t.text || '';
+  const suggested = (t.name || 'Document').replace(/\.[^.]*$/, '') + '.md';
+  if (TAURI) {
+    try {
+      const path = await TAURI.core.invoke('plugin:dialog|save', { options: { defaultPath: suggested } });
+      if (!path) return false;
+      t.mtime = await TAURI.core.invoke('write_file', { path, contents: json });
+      t.path = path; t.name = path.split('/').pop(); t.scratch = false;
+      setDirty(t, false); renderTabStrip(); recordRecent(t.name, t.path); saveSession();
+      return true;
+    } catch (err) { console.error(err); toast('Save failed'); return false; }
+  }
+  await saveTextAs(json, suggested);   // browser fallback: download
+  return true;
+}
+
+// Convert a PDF / Word / HTML document into an editable Markdown copy.
+async function editAsMarkdown() {
+  const t = activeTab();
+  if (!t || !['pdf', 'docx', 'html'].includes(t.kind)) { toast('Open a PDF, Word or HTML document'); return; }
+  toast('Converting to Markdown…');
+  let mdText;
+  try {
+    mdText = t.kind === 'pdf' ? await pdfToMarkdown(t) : htmlToMarkdown(t.html || '');
+  } catch (err) { console.error(err); toast('Conversion failed'); return; }
+  if (!mdText || !mdText.trim()) { toast('No editable text found in this document'); return; }
+  const tab = await makeTab({ name: stem(t.name) + '.md', mtime: 0 }, 'md', { text: mdText });
+  tab.scratch = true;          // in-memory until the user saves a copy
+  tab.editing = true; tab.editSurface = 'rich';
+  addTab(tab);
+  historyReset(); setTimeout(historySnapshot, 80);
+  toast('Editable Markdown copy — ⌘S to save it as a file');
 }
 
 async function toggleEdit() {
@@ -2020,7 +2071,7 @@ function applyRichState(t) {
   const rich = !!(t && t.editing && (t.editSurface || 'rich') === 'rich' && TEXT_KINDS.includes(t.kind));
   contentEl.contentEditable = rich ? 'true' : 'false';
   document.body.classList.toggle('rich-editing', rich);
-  $('edit-toolbar').hidden = !rich;
+  layoutEditorChrome(rich);
   if (!rich) { closeLinkPop(); closeSlashMenu(); $('sel-bubble').hidden = true; $('table-tools').hidden = true; $('block-handle').hidden = true; }
   updateReplaceRow();
   if (rich) renderCallouts();
@@ -2320,9 +2371,222 @@ function svgIcon(name, filled) {
   return `<svg viewBox="0 0 24 24">${ICON_PATHS[name] || ''}</svg>`.replace('<svg ', filled ? '<svg data-filled ' : '<svg ');
 }
 
+/* ---------- Annotations: highlights + margin notes (reflowable docs) ----------
+   Stored in the library sidecar keyed by file path (never in the document),
+   anchored by character offsets into the rendered text so they survive reopen.
+   Applies to md / docx / text / html reader views. */
+
+const HL_COLORS = { yellow: '#ffd43b', green: '#8ce99a', blue: '#74c0fc', pink: '#faa2c1', orange: '#ffc078' };
+const ANNOTATABLE = ['md', 'docx', 'text', 'html'];
+function canAnnotate(t) { return t && t.path && ANNOTATABLE.includes(t.kind) && t.kind !== 'unsupported'; }
+function annsFor(path) { return (library.annotations && library.annotations[path]) || []; }
+function setAnns(path, list) {
+  library.annotations ||= {};
+  if (list.length) library.annotations[path] = list; else delete library.annotations[path];
+  saveLibrary();
+}
+
+// char offset of a (node, offset) point within root's text — robust to the
+// point sitting on an element node (child index) as well as a text node.
+function pointOffset(root, node, off) {
+  const r = document.createRange();
+  r.setStart(root, 0);
+  try { r.setEnd(node, off); } catch (_) { return 0; }
+  return r.toString().length;
+}
+function rangeToOffsets(root, range) {
+  return { start: pointOffset(root, range.startContainer, range.startOffset), end: pointOffset(root, range.endContainer, range.endOffset) };
+}
+// build a DOM Range for a [start,end) char span within root
+function offsetsToRange(root, start, end) {
+  const r = document.createRange();
+  let n = 0, set = false;
+  const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let cur;
+  while ((cur = w.nextNode())) {
+    const len = cur.data.length;
+    if (!set && start <= n + len) { r.setStart(cur, Math.max(0, start - n)); set = true; }
+    if (set && end <= n + len) { r.setEnd(cur, Math.max(0, end - n)); return r; }
+    n += len;
+  }
+  return set ? r : null;
+}
+// wrap every text segment of `range` in its own <mark> (handles multi-element spans)
+function wrapRange(range, cls, ds) {
+  const root = range.commonAncestorContainer.nodeType === 1 ? range.commonAncestorContainer : range.commonAncestorContainer.parentNode;
+  const nodes = [];
+  const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let n; while ((n = w.nextNode())) { if (range.intersectsNode(n)) nodes.push(n); }
+  const marks = [];
+  for (const node of nodes) {
+    const seg = document.createRange();
+    seg.selectNodeContents(node);
+    if (node === range.startContainer) seg.setStart(node, range.startOffset);
+    if (node === range.endContainer) seg.setEnd(node, range.endOffset);
+    if (seg.collapsed) continue;
+    const m = document.createElement('mark');
+    m.className = cls;
+    Object.assign(m.dataset, ds);
+    try { seg.surroundContents(m); marks.push(m); } catch (_) {}
+  }
+  return marks;
+}
+
+function applyAnnotations(t) {
+  if (!canAnnotate(t)) return;
+  for (const a of annsFor(t.path)) {
+    const range = offsetsToRange(contentEl, a.start, a.end);
+    if (!range) continue;
+    const marks = wrapRange(range, 'sutra-hl' + (a.note ? ' has-note' : ''), { hlId: a.id });
+    marks.forEach(m => { m.style.setProperty('--hlc', HL_COLORS[a.color] || HL_COLORS.yellow); });
+  }
+}
+
+let _hlSel = null;   // pending selection range while the popover is open
+let _hlEdit = null;  // id of the highlight being edited
+
+function readSelectionRange() {
+  const s = getSelection();
+  if (!s.rangeCount || s.isCollapsed) return null;
+  const r = s.getRangeAt(0);
+  if (!contentEl.contains(r.commonAncestorContainer)) return null;
+  if (!r.toString().trim()) return null;
+  return r;
+}
+
+// show the highlight popover above a rect (selection or an existing mark)
+function showHlPop(rect, mode) {
+  const pop = $('hl-pop');
+  pop.dataset.mode = mode;                 // 'create' | 'edit'
+  pop.hidden = false;
+  const mr = $('main').getBoundingClientRect();
+  const pw = pop.offsetWidth || 210, ph = pop.offsetHeight || 40;
+  let left = rect.left + rect.width / 2 - mr.left - pw / 2;
+  left = Math.max(8, Math.min(left, mr.width - pw - 8));
+  let top = rect.top - mr.top - ph - 8;
+  if (top < 6) top = rect.bottom - mr.top + 8;   // flip below if no room above
+  pop.style.left = left + 'px';
+  pop.style.top = top + 'px';
+}
+function hideHlPop() { $('hl-pop').hidden = true; $('hl-note-pop').hidden = true; _hlSel = null; _hlEdit = null; }
+
+// create a highlight from the current selection
+function createHighlight(color) {
+  const t = activeTab();
+  if (!t || !_hlSel) return null;
+  const { start, end } = rangeToOffsets(contentEl, _hlSel);
+  if (end <= start) return null;
+  const a = { id: 'h' + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36), color, start, end, quote: _hlSel.toString().slice(0, 400), note: '', ts: Date.now() };
+  const list = annsFor(t.path).concat(a);
+  setAnns(t.path, list);
+  const range = offsetsToRange(contentEl, a.start, a.end);
+  if (range) wrapRange(range, 'sutra-hl', { hlId: a.id }).forEach(m => m.style.setProperty('--hlc', HL_COLORS[color]));
+  getSelection().removeAllRanges();
+  if (sideMode === 'notes') renderNotesPane();
+  return a;
+}
+function recolorHighlight(id, color) {
+  const t = activeTab();
+  const list = annsFor(t.path); const a = list.find(x => x.id === id);
+  if (!a) return; a.color = color; setAnns(t.path, list);
+  contentEl.querySelectorAll(`.sutra-hl[data-hl-id="${id}"]`).forEach(m => m.style.setProperty('--hlc', HL_COLORS[color]));
+  if (sideMode === 'notes') renderNotesPane();
+}
+function removeHighlight(id) {
+  const t = activeTab();
+  setAnns(t.path, annsFor(t.path).filter(x => x.id !== id));
+  contentEl.querySelectorAll(`.sutra-hl[data-hl-id="${id}"]`).forEach(m => { const p = m.parentNode; while (m.firstChild) p.insertBefore(m.firstChild, m); p.removeChild(m); p.normalize(); });
+  hideHlPop();
+  if (sideMode === 'notes') renderNotesPane();
+}
+function saveNote(id, text) {
+  const t = activeTab();
+  const list = annsFor(t.path); const a = list.find(x => x.id === id);
+  if (!a) return; a.note = text.trim(); setAnns(t.path, list);
+  contentEl.querySelectorAll(`.sutra-hl[data-hl-id="${id}"]`).forEach(m => m.classList.toggle('has-note', !!a.note));
+  if (sideMode === 'notes') renderNotesPane();
+}
+
+function openNoteEditor(id) {
+  const t = activeTab(); const a = annsFor(t.path).find(x => x.id === id); if (!a) return;
+  const np = $('hl-note-pop'); const ta = $('hl-note-text');
+  ta.value = a.note || '';
+  np.hidden = false;
+  const pop = $('hl-pop');
+  np.style.left = pop.style.left; np.style.top = (parseFloat(pop.style.top) + 34) + 'px';
+  $('hl-pop').hidden = true;
+  setTimeout(() => ta.focus(), 20);
+  ta.onblur = () => { saveNote(id, ta.value); np.hidden = true; };
+}
+
+function wireAnnotations() {
+  // read-mode selection → show the create popover
+  document.addEventListener('selectionchange', () => {
+    if (isRichEditing()) return;
+    const t = activeTab();
+    if (!canAnnotate(t)) return;
+    clearTimeout(wireAnnotations._t);
+    wireAnnotations._t = setTimeout(() => {
+      const r = readSelectionRange();
+      if (r) { _hlSel = r; _hlEdit = null; showHlPop(r.getBoundingClientRect(), 'create'); }
+      else if ($('hl-pop').dataset.mode === 'create') $('hl-pop').hidden = true;
+    }, 120);
+  });
+  // click an existing highlight → edit popover
+  contentEl.addEventListener('click', (e) => {
+    const m = e.target.closest('.sutra-hl');
+    if (!m || isRichEditing()) return;
+    e.preventDefault();
+    _hlEdit = m.dataset.hlId; _hlSel = null;
+    showHlPop(m.getBoundingClientRect(), 'edit');
+    const a = annsFor(activeTab().path).find(x => x.id === _hlEdit);
+    if (a && a.note) openNoteEditor(_hlEdit);
+  });
+  // popover buttons
+  $('hl-pop').addEventListener('mousedown', (e) => e.preventDefault()); // keep the selection
+  $('hl-pop').addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    const color = b.dataset.color;
+    if (color) { if (_hlEdit) recolorHighlight(_hlEdit, color); else { const a = createHighlight(color); _hlEdit = a && a.id; } }
+    else if (b.dataset.act === 'note') { const id = _hlEdit || (createHighlight('yellow') || {}).id; if (id) openNoteEditor(id); return; }
+    else if (b.dataset.act === 'remove' && _hlEdit) { removeHighlight(_hlEdit); return; }
+    hideHlPop();
+  });
+  document.addEventListener('mousedown', (e) => {
+    if (!e.target.closest('#hl-pop, #hl-note-pop, .sutra-hl')) hideHlPop();
+  });
+}
+
+function renderNotesPane() {
+  const host = $('notes-pane'); if (!host) return;
+  const t = activeTab();
+  const list = t ? annsFor(t.path) : [];
+  host.innerHTML = '';
+  if (!list.length) { host.innerHTML = '<div class="notes-empty">No highlights yet. Select text in the document to highlight it.</div>'; return; }
+  list.sort((a, b) => a.start - b.start);
+  for (const a of list) {
+    const row = document.createElement('div'); row.className = 'note-row';
+    row.innerHTML = `<span class="note-dot" style="background:${HL_COLORS[a.color] || HL_COLORS.yellow}"></span>`
+      + `<div class="note-body"><div class="note-quote"></div>${a.note ? '<div class="note-text"></div>' : ''}</div>`
+      + `<button class="note-del" title="Remove">✕</button>`;
+    row.querySelector('.note-quote').textContent = a.quote;
+    if (a.note) row.querySelector('.note-text').textContent = a.note;
+    row.querySelector('.note-body').addEventListener('click', () => scrollToHighlight(a.id));
+    row.querySelector('.note-del').addEventListener('click', (e) => { e.stopPropagation(); removeHighlight(a.id); });
+    host.appendChild(row);
+  }
+}
+function scrollToHighlight(id) {
+  const m = contentEl.querySelector(`.sutra-hl[data-hl-id="${id}"]`);
+  if (!m) return;
+  const top = m.getBoundingClientRect().top, srect = scrollerEl.getBoundingClientRect();
+  scrollerEl.scrollTop += top - srect.top - srect.height * 0.35;
+  m.classList.add('flash'); setTimeout(() => m.classList.remove('flash'), 900);
+}
+
 /* ---------- Command palette (⌘K) ---------- */
 
-const cmdState = { items: [], filtered: [], idx: 0 };
+const cmdState = { items: [], filtered: [], idx: 0, query: '', searchItems: [], searchQuery: '' };
 
 function cmdActions() {
   const t = activeTab();
@@ -2342,6 +2606,10 @@ function cmdActions() {
   list.push({ id: 'open-folder', label: 'Open a folder (wiki mode)', hint: '⌘⇧O', icon: 'doc', run: () => { closeCmd(); if (typeof openFolder === 'function') openFolder(); } });
   list.push({ id: 'new-project', label: 'New project…', hint: '', icon: 'layers', run: () => { closeCmd(); openProjectModal((id) => { const t = activeTab(); if (t && t.path) assignToProject(t.path, id); sideMode = 'files'; updateSidebar(); }); } });
   if (t && t.path) list.push({ id: 'add-to-project', label: 'Add this document to a project…', hint: '', icon: 'layers', run: () => { closeCmd(); openTabAssignMenuCentered(t); } });
+  if (t && t.path && t.kind !== 'canvas') list.push({ id: 'send-canvas', label: 'Send to canvas…', hint: '', icon: 'canvas', run: () => { closeCmd(); sendDocToCanvas(t); } });
+  if (t && t.kind !== 'canvas' && t.kind !== 'unsupported') list.push({ id: 'ai-board', label: 'Turn into a canvas board (AI)', hint: 'AI', icon: 'canvas', run: () => { closeCmd(); toggleAiPanel(true); aiToCanvas(); } });
+  if (t && TEXT_KINDS.includes(t.kind)) list.push({ id: 'present-md', label: 'Present as slides', hint: '⌘⇧P', icon: 'present', run: () => { closeCmd(); startMdPresentation(); } });
+  if (t && ['pdf', 'docx', 'html'].includes(t.kind)) list.push({ id: 'edit-md', label: 'Edit as Markdown', hint: '', icon: 'pencil', run: () => { closeCmd(); editAsMarkdown(); } });
   for (const th of THEMES) list.push({ id: 'theme:' + th.key, label: 'Theme: ' + th.label, hint: '', icon: 'theme', sw: th.sw, run: () => { settings.theme = th.key; saveSettings(); applySettings(); closeCmd(); } });
   return list;
 }
@@ -2349,34 +2617,101 @@ function cmdActions() {
 function openCmd() {
   cmdState.items = cmdActions();
   cmdState.idx = 0;
+  cmdState.searchItems = []; cmdState.searchQuery = '';   // no stale hits from last time
   $('cmd-overlay').hidden = false;
   $('cmd-input').value = '';
+  $('cmd-input').placeholder = folder ? 'Search files, content and commands…' : 'Search files and commands…';
   filterCmd('');
   $('cmd-input').focus();
 }
 function closeCmd() { $('cmd-overlay').hidden = true; }
 
+let _searchTimer = 0, _searchToken = 0;
 function filterCmd(q) {
   const lq = q.toLowerCase().trim();
-  cmdState.filtered = lq ? cmdState.items.filter(a => a.label.toLowerCase().includes(lq)) : cmdState.items;
+  cmdState.query = lq;
+  const cmds = lq ? cmdState.items.filter(a => a.label.toLowerCase().includes(lq)) : cmdState.items;
+  // content-search results (folder / wiki mode) sit below the commands
+  const hits = (lq.length >= 2 && cmdState.searchQuery === lq) ? cmdState.searchItems : [];
+  cmdState.filtered = [...cmds, ...hits];
   cmdState.idx = Math.min(cmdState.idx, Math.max(0, cmdState.filtered.length - 1));
   renderCmd();
+  // kick a debounced native content search across the open folder
+  clearTimeout(_searchTimer);
+  if (folder && TAURI && lq.length >= 2) {
+    const token = ++_searchToken;
+    _searchTimer = setTimeout(async () => {
+      try {
+        const rows = await TAURI.core.invoke('search_folder', { root: folder.root, query: lq });
+        if (token !== _searchToken) return;                 // stale — user kept typing
+        cmdState.searchQuery = lq;
+        cmdState.searchItems = rows.map(r => ({
+          search: true, path: r.path, name: r.name, line: r.line, count: r.count,
+          snippet: r.snippet, col: r.col, q: lq,
+          run: () => openAtQuery(r.path, lq),
+        }));
+        if (cmdState.query === lq) filterCmd(q);            // re-render with results in
+      } catch (err) { console.error('search failed', err); }
+    }, 160);
+  } else { cmdState.searchItems = []; cmdState.searchQuery = ''; }
 }
 
 function renderCmd() {
   const list = $('cmd-list');
   list.innerHTML = '';
-  if (!cmdState.filtered.length) { list.innerHTML = '<div class="cmd-none">No matching actions</div>'; return; }
+  if (!cmdState.filtered.length) {
+    list.innerHTML = cmdState.query
+      ? `<div class="cmd-none">No matches${folder ? '' : ' — open a folder (⌘⇧O) to search across files'}</div>`
+      : '<div class="cmd-none">Type to search files, content and commands</div>';
+    return;
+  }
+  let sawSearch = false;
   cmdState.filtered.forEach((a, i) => {
+    if (a.search && !sawSearch) {                            // section header before the first hit
+      sawSearch = true;
+      const h = document.createElement('div'); h.className = 'cmd-section'; h.textContent = 'In documents';
+      list.appendChild(h);
+    }
     const row = document.createElement('button');
-    row.className = 'cmd-row' + (i === cmdState.idx ? ' sel' : '');
-    const swatch = a.sw ? `<span class="cmd-sw">${a.sw.map(c => `<i style="background:${c}"></i>`).join('')}</span>` : '';
-    row.innerHTML = `<span class="cmd-ic${a.filled ? ' filled' : ''}">${svgIcon(a.icon, a.filled)}</span><span class="cmd-label"></span>${swatch}${a.hint ? `<span class="cmd-hint">${a.hint}</span>` : ''}`;
-    row.querySelector('.cmd-label').textContent = a.label;
+    row.className = 'cmd-row' + (a.search ? ' cmd-search' : '') + (i === cmdState.idx ? ' sel' : '');
+    if (a.search) {
+      row.innerHTML = `<span class="cmd-ic">${svgIcon('find')}</span>`
+        + `<span class="cmd-hit"><span class="cmd-hit-name"></span><span class="cmd-hit-snip"></span></span>`
+        + `<span class="cmd-hint">${a.count > 1 ? a.count + ' hits' : ''}</span>`;
+      row.querySelector('.cmd-hit-name').textContent = a.name;
+      row.querySelector('.cmd-hit-snip').append(highlightSnippet(a.snippet, a.col, a.q.length));
+    } else {
+      const swatch = a.sw ? `<span class="cmd-sw">${a.sw.map(c => `<i style="background:${c}"></i>`).join('')}</span>` : '';
+      row.innerHTML = `<span class="cmd-ic${a.filled ? ' filled' : ''}">${svgIcon(a.icon, a.filled)}</span><span class="cmd-label"></span>${swatch}${a.hint ? `<span class="cmd-hint">${a.hint}</span>` : ''}`;
+      row.querySelector('.cmd-label').textContent = a.label;
+    }
     row.addEventListener('mousemove', () => { if (cmdState.idx !== i) { cmdState.idx = i; renderCmd(); } });
     row.addEventListener('click', () => a.run());
     list.appendChild(row);
   });
+}
+
+// snippet with the matched term wrapped in <mark>, built safely (no innerHTML)
+function highlightSnippet(snippet, col, len) {
+  const frag = document.createDocumentFragment();
+  const c = Math.max(0, Math.min(col, snippet.length));
+  frag.append(document.createTextNode(snippet.slice(0, c)));
+  const m = document.createElement('mark'); m.textContent = snippet.slice(c, c + len);
+  frag.append(m, document.createTextNode(snippet.slice(c + len)));
+  return frag;
+}
+
+// open (or switch to) a file and highlight/scroll to the search term
+async function openAtQuery(path, query) {
+  closeCmd();
+  await openTauriPath(path);
+  setTimeout(() => {
+    if (!activeTab()) return;
+    $('findbar').hidden = false;
+    updateReplaceRow();
+    $('find-input').value = query;
+    runFind(query);
+  }, 380);
 }
 
 function cmdKeydown(e) {
@@ -2424,6 +2759,88 @@ function wireSelBubble() {
       updateSelBubble();
     }
   });
+}
+
+/* ---------- AI selection menu (Actions + Rewrite) ---------- */
+
+const REWRITES = {
+  grammar:  'Fix spelling, grammar and punctuation. Keep the meaning, voice and any Markdown formatting identical.',
+  positive: 'Rewrite it in a warmer, more positive and constructive tone, keeping the meaning.',
+  punchier: 'Make it punchier and more concise — stronger verbs, less filler — keeping the meaning.',
+  shorter:  'Make it noticeably shorter while keeping the key meaning.',
+  longer:   'Expand it with a little more detail and clarity in the same voice.',
+};
+
+let _selRange = null;   // the selection captured when the menu opened
+function selMenuText() { return _selRange ? _selRange.toString() : ''; }
+function restoreSel() {
+  if (!_selRange) return false;
+  contentEl.focus();
+  const s = getSelection(); s.removeAllRanges(); s.addRange(_selRange);
+  return true;
+}
+
+function openSelMenu() {
+  const s = getSelection();
+  if (!s.rangeCount || s.isCollapsed) return;
+  _selRange = s.getRangeAt(0).cloneRange();
+  const rect = _selRange.getBoundingClientRect();
+  const menu = $('sel-menu');
+  menu.hidden = false;
+  const mr = $('main').getBoundingClientRect();
+  const mw = menu.offsetWidth || 240, mh = menu.offsetHeight || 300;
+  let left = Math.max(8, Math.min(rect.left - mr.left, mr.width - mw - 8));
+  let top = rect.bottom - mr.top + 8;
+  if (top + mh > mr.height - 8) top = Math.max(8, rect.top - mr.top - mh - 8);
+  menu.style.left = left + 'px'; menu.style.top = top + 'px';
+  $('sel-bubble').hidden = true;
+}
+function closeSelMenu() { $('sel-menu').hidden = true; }
+
+async function aiRewriteSel(kind) {
+  const text = selMenuText().trim();
+  if (!text) return;
+  closeSelMenu();
+  toast('Rewriting…');
+  try {
+    const out = (await callAI({
+      system: 'You are an inline text editor. ' + REWRITES[kind] + ' Reply with ONLY the rewritten text — no quotes, no preamble, no explanation. Preserve the original language.',
+      messages: [{ role: 'user', content: text }],
+    })).trim();
+    if (!out) throw new Error('empty result');
+    if (restoreSel()) execEditorCmd(() => document.execCommand('insertText', false, out));
+  } catch (err) { toast('AI: ' + (err.message || err)); }
+}
+
+async function translateSel() {
+  const text = selMenuText().trim(); if (!text) return;
+  const lang = await askLanguage(); if (!lang) return;
+  toast('Translating…');
+  try {
+    const out = (await callAI({ system: 'Translate the text into ' + lang + '. Reply with ONLY the translation — no quotes or notes.', messages: [{ role: 'user', content: text }] })).trim();
+    if (out && restoreSel()) execEditorCmd(() => document.execCommand('insertText', false, out));
+  } catch (e) { toast('AI: ' + e.message); }
+}
+
+function wireSelMenu() {
+  const ai = $('sb-ai');
+  ai.addEventListener('mousedown', (e) => e.preventDefault());
+  ai.addEventListener('click', openSelMenu);
+  const menu = $('sel-menu');
+  menu.addEventListener('mousedown', (e) => e.preventDefault());
+  menu.addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    if (b.dataset.rw) { aiRewriteSel(b.dataset.rw); return; }
+    const text = selMenuText();
+    if (b.dataset.act === 'copy') navigator.clipboard.writeText(text).then(() => toast('Copied'));
+    else if (b.dataset.act === 'translate') { closeSelMenu(); translateSel(); return; }
+    else if (b.dataset.act === 'search') {
+      const url = 'https://www.google.com/search?q=' + encodeURIComponent(text.slice(0, 300));
+      if (TAURI) TAURI.core.invoke('open_externally', { path: url }); else window.open(url, '_blank');
+    }
+    closeSelMenu();
+  });
+  document.addEventListener('mousedown', (e) => { if (!e.target.closest('#sel-menu, #sb-ai')) closeSelMenu(); });
 }
 
 /* ---------- Slash menu ("/" block palette) ---------- */
@@ -2855,6 +3272,7 @@ const EDITOR_CMDS = {
   redo: () => editRedo(),
   bold: () => execEditorCmd(() => document.execCommand('bold')),
   italic: () => execEditorCmd(() => document.execCommand('italic')),
+  underline: () => execEditorCmd(() => document.execCommand('underline')),
   strike: () => execEditorCmd(() => document.execCommand('strikeThrough')),
   code: () => execEditorCmd(toggleInlineCode),
   link: () => openLinkPop(),
@@ -2871,22 +3289,72 @@ const EDITOR_CMDS = {
 };
 
 function updateToolbarState() {
-  if ($('edit-toolbar').hidden) return;
+  const tb = $('edit-toolbar'), insp = $('editor-inspector');
+  if (tb.hidden && insp.hidden) return;
   const el = selElement();
   const q = (cmd) => { try { return document.queryCommandState(cmd); } catch (_) { return false; } };
+  // mark the same command in whichever chrome is visible (toolbar or inspector)
+  const scope = tb.hidden ? insp : tb;
   const mark = (name, on) => {
-    const b = document.querySelector(`#edit-toolbar [data-cmd="${name}"]`);
+    const b = scope.querySelector(`[data-cmd="${name}"]`);
     if (b) b.classList.toggle('on', !!on);
   };
   mark('bold', q('bold'));
   mark('italic', q('italic'));
+  mark('underline', q('underline'));
   mark('strike', q('strikeThrough'));
   mark('code', el && el.closest('code') && !el.closest('pre'));
   mark('link', el && el.closest('a'));
   const blk = currentBlock();
   const tag = blk ? blk.tagName.toLowerCase() : 'p';
-  $('tb-block').value = ['h1', 'h2', 'h3', 'h4', 'blockquote', 'pre'].includes(tag) ? tag
-    : (blk && blk.querySelector && (tag === 'ul' || tag === 'ol')) ? 'p' : 'p';
+  const blockVal = ['h1', 'h2', 'h3', 'h4', 'blockquote', 'pre'].includes(tag) ? tag : 'p';
+  if (!tb.hidden) $('tb-block').value = blockVal;
+  if (!insp.hidden) $('insp-block').value = blockVal;
+}
+
+// Choose the editor chrome by width: the right inspector on wide screens, the
+// compact top toolbar when the window is too narrow for a 264px panel (mobile).
+function layoutEditorChrome(rich) {
+  if (rich === undefined) rich = isRichEditing();
+  const wide = $('main').clientWidth >= 900;
+  const useInspector = rich && wide;
+  $('editor-inspector').hidden = !useInspector;
+  $('edit-toolbar').hidden = !(rich && !wide);
+  document.body.classList.toggle('has-inspector', useInspector);
+  if (useInspector) syncInspector();
+}
+
+// Push current settings into the inspector's Style/Text controls.
+function syncInspector() {
+  document.querySelectorAll('#editor-inspector .insp-style').forEach(b =>
+    b.classList.toggle('on', b.dataset.font === settings.font));
+  document.querySelectorAll('#insp-width button').forEach(b =>
+    b.classList.toggle('sel', b.dataset.v === settings.width));
+  const fv = $('insp-fs-val'), lv = $('insp-lh-val');
+  if (fv) fv.textContent = settings.fontSize + 'px';
+  if (lv) lv.textContent = (settings.lineSpacing || 1.7).toFixed(1);
+  updateToolbarState();
+}
+
+function wireInspector() {
+  const insp = $('editor-inspector');
+  // preserve the selection: don't let button clicks steal focus (as the toolbar does)
+  insp.addEventListener('mousedown', (e) => {
+    if (e.target.closest('button') && !e.target.closest('#insp-block')) e.preventDefault();
+  });
+  insp.addEventListener('click', (e) => {
+    const cmdBtn = e.target.closest('button[data-cmd]');
+    if (cmdBtn && EDITOR_CMDS[cmdBtn.dataset.cmd]) { EDITOR_CMDS[cmdBtn.dataset.cmd](); return; }
+    const styleBtn = e.target.closest('.insp-style');
+    if (styleBtn) { settings.font = styleBtn.dataset.font; saveSettings(); applySettings(); syncInspector(); return; }
+    const widthBtn = e.target.closest('#insp-width button');
+    if (widthBtn) { settings.width = widthBtn.dataset.v; saveSettings(); applySettings(); syncInspector(); return; }
+  });
+  $('insp-block').addEventListener('change', (e) => { execEditorCmd(() => setBlockType(e.target.value)); contentEl.focus(); });
+  $('insp-fs-minus').addEventListener('click', () => { settings.fontSize = Math.max(12, settings.fontSize - 1); saveSettings(); applySettings(); syncInspector(); });
+  $('insp-fs-plus').addEventListener('click', () => { settings.fontSize = Math.min(24, settings.fontSize + 1); saveSettings(); applySettings(); syncInspector(); });
+  $('insp-lh-minus').addEventListener('click', () => { settings.lineSpacing = Math.max(1.2, Math.round(((settings.lineSpacing || 1.7) - 0.1) * 10) / 10); saveSettings(); applySettings(); syncInspector(); });
+  $('insp-lh-plus').addEventListener('click', () => { settings.lineSpacing = Math.min(2.4, Math.round(((settings.lineSpacing || 1.7) + 0.1) * 10) / 10); saveSettings(); applySettings(); syncInspector(); });
 }
 
 function wireEditorToolbar() {
@@ -2998,9 +3466,131 @@ async function saveEditor(t) {
   }
 }
 
+/* ---------- Dock resizing (sidebar + AI panel) ----------
+   One pointer-based implementation for both docks: works with mouse, trackpad,
+   touch and pen; rAF-throttled so dragging stays at frame rate; and clamped
+   against the live viewport so a dock can never crush the document. */
+
+const DOCK_MIN_CONTENT = 320;   // the document never gets narrower than this
+// `collapseAt`: drag the divider past this and the dock closes entirely
+// (⌘B / ⌘J bring it back at its remembered width).
+const DOCKS = {
+  toc: { panel: 'sidebar',  handle: 'toc-resize', side: 'left',  min: 180, def: 250, key: 'tocWidth', collapseAt: 140 },
+  ai:  { panel: 'ai-panel', handle: 'ai-resize',  side: 'right', min: 280, def: 340, key: 'aiWidth',  collapseAt: 200 },
+};
+
+function collapseDock(which) {
+  if (which === 'toc') { sidebarCollapsed = true; updateSidebar(); syncDrawerBackdrop(); }
+  else toggleAiPanel(false);
+}
+
+function dockVisible(d) {
+  const el = $(d.panel);
+  if (!el || el.hidden) return false;
+  if (d.panel === 'sidebar') return !el.classList.contains('hidden') && getComputedStyle(el).display !== 'none';
+  return true;
+}
+
+// How wide this dock may get right now: measured from the live layout — total
+// width minus every other fixed-width sibling (rail, other dock, the resize
+// handles themselves) minus the document's minimum. The flexible content panes
+// are skipped since they're what we're budgeting for.
+const DOCK_FLEX_PANES = ['scroller', 'canvasview', 'mapview', 'graphview', 'empty', 'unsupported', 'home', 'pages'];
+function dockMax(which) {
+  const d = DOCKS[which], panel = $(d.panel), main = $('main');
+  let used = 0;
+  for (const kid of main.children) {
+    if (kid === panel || DOCK_FLEX_PANES.includes(kid.id)) continue;
+    if (kid.hidden || getComputedStyle(kid).display === 'none') continue;
+    used += kid.offsetWidth;
+  }
+  return Math.max(d.min, main.clientWidth - used - DOCK_MIN_CONTENT);
+}
+
+function setDockWidth(which, w, { save = false } = {}) {
+  const d = DOCKS[which];
+  const clamped = Math.round(Math.min(dockMax(which), Math.max(d.min, w)));
+  $(d.panel).style.width = clamped + 'px';
+  settings[d.key] = clamped;
+  if (save) saveSettings();
+  return clamped;
+}
+
+function wireDockResizer(which) {
+  const d = DOCKS[which];
+  const handle = $(d.handle), panel = $(d.panel);
+  if (!handle || !panel) return;
+  let raf = 0, next = null;
+
+  const flush = () => { raf = 0; if (next != null) setDockWidth(which, next); };
+
+  handle.addEventListener('pointerdown', (e) => {
+    if (e.button != null && e.button !== 0) return;   // left/primary only
+    e.preventDefault();
+    try { handle.setPointerCapture(e.pointerId); } catch (_) {}  // keeps the drag alive off-handle
+    handle.classList.add('dragging');
+    document.body.classList.add('dock-resizing');     // kills text selection + iframe steal
+    const r = panel.getBoundingClientRect();
+    const anchor = d.side === 'left' ? r.left : r.right;
+
+    const move = (ev) => {
+      const raw = d.side === 'left' ? ev.clientX - anchor : anchor - ev.clientX;
+      // dragged past the threshold → close the dock and end the drag
+      if (raw < d.collapseAt) { next = null; up(); collapseDock(which); return; }
+      // near the threshold, hint that letting go here would close it
+      panel.classList.toggle('will-collapse', raw < d.collapseAt + 45);
+      next = raw;
+      if (!raf) raf = requestAnimationFrame(flush);    // ≤1 layout per frame
+    };
+    const up = () => {
+      handle.removeEventListener('pointermove', move);
+      handle.removeEventListener('pointerup', up);
+      handle.removeEventListener('pointercancel', up);
+      if (raf) { cancelAnimationFrame(raf); raf = 0; }
+      if (next != null) setDockWidth(which, next);
+      handle.classList.remove('dragging');
+      panel.classList.remove('will-collapse');
+      document.body.classList.remove('dock-resizing');
+      saveSettings();   // only ever holds a >= min width — collapse never persists one
+    };
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', up);
+    handle.addEventListener('pointercancel', up);
+  });
+
+  // double-click the divider → back to the default width
+  handle.addEventListener('dblclick', () => setDockWidth(which, d.def, { save: true }));
+}
+
+// Re-clamp on window resize so a wide dock can't squeeze the document when the
+// window shrinks (and let it grow back to the user's width when it re-widens).
+function reclampDocks() {
+  for (const which of Object.keys(DOCKS)) {
+    const d = DOCKS[which];
+    if (!dockVisible(d)) continue;
+    setDockWidth(which, settings[d.key] || d.def);
+  }
+}
+
+function wireDockResizers() {
+  for (const which of Object.keys(DOCKS)) {
+    const d = DOCKS[which];
+    if (settings[d.key]) $(d.panel).style.width = settings[d.key] + 'px';
+    wireDockResizer(which);
+  }
+  // Watch the actual container, not just window.resize — this catches every
+  // size change (window, zoom, OS chrome) and can't be missed. #main's own size
+  // doesn't change when we resize a dock, so there's no feedback loop.
+  // (Called directly: ResizeObserver already batches to one callback per frame,
+  // and this keeps the reflow off the rAF queue.)
+  if (window.ResizeObserver) new ResizeObserver(() => { reclampDocks(); layoutEditorChrome(); }).observe($('main'));
+  window.addEventListener('resize', reclampDocks);   // belt and braces
+  reclampDocks();
+}
+
 /* ---------- Freeform canvas (Excalidraw, lazy-loaded) ---------- */
 
-function blankScene() { return { type: 'excalidraw', version: 2, source: 'sutra', elements: [], appState: {}, files: {} }; }
+function blankScene() { return { type: 'excalidraw', version: 2, source: 'sutra', elements: [], appState: { sutraBackground: 'dots' }, files: {} }; }
 function parseScene(text) {
   if (!text) return blankScene();
   try { const s = JSON.parse(text); if (s && Array.isArray(s.elements)) return s; } catch (_) {}
@@ -3031,22 +3621,107 @@ function ensureCanvasLib() {
   return _canvasLibP;
 }
 
+// A curated Canva-style colour strip (Sutra palette + common colours).
+const CANVAS_COLORS = ['#1e1e1e', '#ffffff', '#e03131', '#e8590c', '#f08c00', '#2f9e44',
+  '#0c8599', '#1971c2', '#6741d9', '#c2255c', '#b5623a', '#5a6bb0', '#4f8a80', '#868e96'];
+
 let _canvasTabId = null;          // which canvas tab is currently mounted
 let _canvasSuppressUntil = 0;     // ignore Excalidraw's onChange bursts right after (re)load
 async function renderCanvas(t) {
   showPane('canvas');
+  $('canvasview').dataset.theme = canvasTheme();
   try { await ensureCanvasLib(); } catch (e) { toast('Canvas failed to load'); console.error(e); return; }
   if (activeId !== t.id) return;
-  const host = $('canvasview');
+  // Excalidraw mounts into a dedicated child so our control bar (a sibling)
+  // is never reconciled away by React.
+  let mount = document.getElementById('canvas-mount');
+  if (!mount) { mount = document.createElement('div'); mount.id = 'canvas-mount'; mount.style.cssText = 'position:absolute;inset:0'; $('canvasview').appendChild(mount); }
   _canvasSuppressUntil = Date.now() + 800;
   if (!window.__canvasMounted) {
-    window.SutraCanvas.mount(host, t.scene, { theme: canvasTheme(), onChange: onCanvasChange });
+    window.SutraCanvas.mount(mount, t.scene, { theme: canvasTheme(), onChange: onCanvasChange });
     window.__canvasMounted = true;
   } else if (_canvasTabId !== t.id) {
     window.SutraCanvas.load(t.scene);
   }
   window.SutraCanvas.setTheme(canvasTheme());
   _canvasTabId = t.id;
+  ensureCanvasControls();
+  setTimeout(syncCanvasControls, 140);
+}
+
+let _ccMode = 'fill'; // what the swatches change: 'fill' (background) or 'stroke'
+function applyCanvasColor(color) {
+  if (!window.SutraCanvas) return;
+  if (_ccMode === 'fill') window.SutraCanvas.setFillColor(color);
+  else window.SutraCanvas.setStrokeColor(color);
+}
+
+function ensureCanvasControls() {
+  if (document.getElementById('canvas-controls')) return;
+  const cc = document.createElement('div'); cc.id = 'canvas-controls';
+  // background: None / Grid / Dots
+  const seg = document.createElement('div'); seg.className = 'cc-seg';
+  for (const [v, label] of [['none', 'None'], ['grid', 'Grid'], ['dots', 'Dots']]) {
+    const b = document.createElement('button'); b.dataset.bg = v; b.textContent = label;
+    b.addEventListener('click', () => { window.SutraCanvas && window.SutraCanvas.setBackground(v); syncCanvasControls(); });
+    seg.appendChild(b);
+  }
+  cc.appendChild(seg);
+  cc.appendChild(Object.assign(document.createElement('div'), { className: 'cc-div' }));
+  // what the swatches paint: Fill (shape background) or Stroke
+  const mode = document.createElement('div'); mode.className = 'cc-seg cc-mode';
+  for (const [v, label] of [['fill', 'Fill'], ['stroke', 'Stroke']]) {
+    const b = document.createElement('button'); b.dataset.mode = v; b.textContent = label;
+    b.addEventListener('click', () => { _ccMode = v; syncCanvasControls(); });
+    mode.appendChild(b);
+  }
+  cc.appendChild(mode);
+  // colour strip (transparent first — "no fill")
+  const sw = document.createElement('div'); sw.className = 'cc-swatches';
+  const clear = document.createElement('button'); clear.className = 'cc-sw cc-clear'; clear.title = 'Transparent';
+  clear.addEventListener('click', () => { applyCanvasColor('transparent'); sw.querySelectorAll('.cc-sw').forEach(x => x.classList.remove('sel')); clear.classList.add('sel'); });
+  sw.appendChild(clear);
+  for (const c of CANVAS_COLORS) {
+    const b = document.createElement('button'); b.className = 'cc-sw'; b.style.background = c; b.dataset.color = c; b.title = c;
+    b.addEventListener('click', () => {
+      applyCanvasColor(c);
+      sw.querySelectorAll('.cc-sw').forEach(x => x.classList.remove('sel')); b.classList.add('sel');
+    });
+    sw.appendChild(b);
+  }
+  const more = document.createElement('label'); more.className = 'cc-more'; more.title = 'Custom colour';
+  more.innerHTML = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>';
+  const inp = document.createElement('input'); inp.type = 'color';
+  inp.addEventListener('input', () => applyCanvasColor(inp.value));
+  more.appendChild(inp); sw.appendChild(more);
+  cc.appendChild(sw);
+  // close — pinned to the bar's corner (never participates in wrapping)
+  const close = document.createElement('button'); close.className = 'cc-close'; close.title = 'Hide this bar';
+  close.textContent = '✕';
+  close.addEventListener('click', () => { settings.canvasBarHidden = true; saveSettings(); syncCanvasBarVisibility(); });
+  cc.appendChild(close);
+  $('canvasview').appendChild(cc);
+  // reopen chip (shown when the bar is hidden)
+  const chip = document.createElement('button'); chip.id = 'canvas-bar-chip'; chip.title = 'Canvas colours & background';
+  chip.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><circle cx="8.5" cy="10" r="1.4" fill="currentColor" stroke="none"/><circle cx="14" cy="7.5" r="1.4" fill="currentColor" stroke="none"/><circle cx="15.5" cy="13" r="1.4" fill="currentColor" stroke="none"/><path d="M12 21a9 9 0 0 1 0-18"/></svg>';
+  chip.addEventListener('click', () => { settings.canvasBarHidden = false; saveSettings(); syncCanvasBarVisibility(); });
+  $('canvasview').appendChild(chip);
+  syncCanvasBarVisibility();
+}
+
+function syncCanvasBarVisibility() {
+  const cc = document.getElementById('canvas-controls');
+  const chip = document.getElementById('canvas-bar-chip');
+  if (cc) cc.hidden = !!settings.canvasBarHidden;
+  if (chip) chip.hidden = !settings.canvasBarHidden;
+}
+
+function syncCanvasControls() {
+  const cc = document.getElementById('canvas-controls');
+  if (!cc || !window.SutraCanvas) return;
+  const bg = window.SutraCanvas.getBackground();
+  cc.querySelectorAll('.cc-seg button[data-bg]').forEach(b => b.classList.toggle('sel', b.dataset.bg === bg));
+  cc.querySelectorAll('.cc-mode button').forEach(b => b.classList.toggle('sel', b.dataset.mode === _ccMode));
 }
 
 function onCanvasChange() {
@@ -3096,6 +3771,165 @@ function newCanvas() {
   addTab({ name: 'Untitled canvas.excalidraw', kind: 'canvas', live: true, scene: blankScene(), path: null });
 }
 
+/* ---- AI → Canvas: turn a document into an editable board ---- */
+
+const BOARD_STROKE = ['#b5623a', '#5a6bb0', '#4f8a80', '#8a5a80', '#7a8a4a'];
+
+// Lay out a {label, children} hierarchy as a left→right tree of cards + arrows.
+function layoutBoard(root) {
+  const CW = 214, CH = 60, HGAP = 96, VGAP = 24;
+  const nodes = [], edges = [];
+  let leafY = 0, uid = 0;
+  const walk = (n, depth, parentId) => {
+    const id = 'b' + (uid++);
+    const kids = Array.isArray(n.children) ? n.children : [];
+    let y;
+    if (!kids.length) { y = leafY; leafY += CH + VGAP; }
+    else {
+      const ys = kids.map(k => walk(k, depth + 1, id));
+      y = (ys[0] + ys[ys.length - 1]) / 2;
+    }
+    const stroke = depth === 0 ? '#1e1e1e' : BOARD_STROKE[(depth - 1) % BOARD_STROKE.length];
+    nodes.push({
+      id, label: (n.label || '').slice(0, 90), x: depth * (CW + HGAP), y, w: CW, h: CH, depth,
+      stroke, text: stroke, fontSize: depth === 0 ? 18 : 15,
+      bg: depth === 0 ? colorTint('#b5623a', 0.14) : 'transparent',
+    });
+    if (parentId != null) edges.push({ from: parentId, to: id });
+    return y;
+  };
+  walk(root, 0, null);
+  const byId = Object.fromEntries(nodes.map(n => [n.id, n]));
+  for (const e of edges) {
+    const p = byId[e.from], c = byId[e.to];
+    e.x = p.x + p.w; e.y = p.y + p.h / 2; e.w = c.x - (p.x + p.w); e.h = (c.y + c.h / 2) - (p.y + p.h / 2);
+  }
+  return { nodes, edges };
+}
+
+async function aiToCanvas() {
+  const t = activeTab();
+  if (!t || aiBusy) return;
+  if (t.kind === 'canvas') { toast('Open a document first, then turn it into a board'); return; }
+  aiBusy = true;
+  const busyEl = aiMsgEl('info', 'building a canvas board'); busyEl.classList.add('busy');
+  try {
+    const context = (await docText(t)).slice(0, 350000);
+    const raw = await callAI({
+      system: 'Turn this document into a visual board as a hierarchy. Root label = the document’s core topic (not the filename). 4–8 main branches = its major sections or themes; each branch has 2–5 concise child points capturing the key ideas. Labels: short, meaningful noun phrases (2–7 words) — not generic section names. Respond as JSON: {"root":{"label":"…","children":[{"label":"…","children":[{"label":"…"}]}]}}',
+      messages: [{ role: 'user', content: '<document title="' + t.name + '">\n' + context + '\n</document>' }],
+      schema: MAP_SCHEMA,
+    });
+    const tree = parseJsonLoose(raw).root;
+    if (!tree) throw new Error('Could not extract a structure from this document');
+    const { nodes, edges } = layoutBoard(tree);
+    busyEl.remove();
+    // open a fresh canvas tab and draw the board onto it
+    addTab({ name: stem(t.name) + ' — board.excalidraw', kind: 'canvas', live: true, scene: blankScene(), path: null });
+    const boardTabId = activeId;
+    await ensureCanvasLib();
+    for (let i = 0; i < 80 && _canvasTabId !== boardTabId; i++) await new Promise(r => setTimeout(r, 80));
+    if (window.SutraCanvas && _canvasTabId === boardTabId) {
+      _canvasSuppressUntil = Date.now() + 400;
+      window.SutraCanvas.buildBoard(nodes, edges);
+      const ct = tabs.find(x => x.id === boardTabId);
+      if (ct) { ct.scene = window.SutraCanvas.getScene(); setDirty(ct, true); }
+      aiMsgEl('info', 'Board created — drag cards to rearrange, style them, and ⌘S to save.');
+    } else {
+      aiMsgEl('info', '⚠ Canvas didn’t load in time');
+    }
+    if (mobileMQ.matches) toggleAiPanel(false);
+  } catch (err) { busyEl.remove(); aiErrorEl(err); }
+  finally { aiBusy = false; }
+}
+
+/* ---- Doc ⇄ canvas cross-linking (Phase C) ---- */
+
+// Clicking a card's sutra:// link on the canvas opens the document.
+window.SutraCanvasOnLink = (href) => {
+  if (!href || !href.startsWith('sutra://open')) return false; // let real URLs behave normally
+  try {
+    const path = decodeURIComponent(href.split('path=')[1] || '');
+    if (path) {
+      const existing = tabs.find(x => x.path === path);
+      if (existing) switchTab(existing.id);
+      else if (TAURI) openTauriPath(path);
+      else toast('Linked file opens in the desktop app');
+    }
+  } catch (err) { console.error('canvas link failed', err); }
+  return true;
+};
+
+// Add a card for document tab `t` onto canvas tab `ct` (mounting it first).
+async function addDocCardToCanvas(ct, t) {
+  switchTab(ct.id);
+  for (let i = 0; i < 60 && !(window.SutraCanvas && _canvasTabId === ct.id); i++) await new Promise(r => setTimeout(r, 100));
+  if (!(window.SutraCanvas && _canvasTabId === ct.id)) { toast('Canvas didn’t load'); return; }
+  const ok = window.SutraCanvas.addDocCard({
+    name: t.name,
+    link: 'sutra://open?path=' + encodeURIComponent(t.path),
+    color: badgeFor(t.kind).color,
+  });
+  if (!ok) return;
+  // mark + persist directly (the post-mount onChange guard would swallow this)
+  ct.scene = window.SutraCanvas.getScene();
+  setDirty(ct, true);
+  if (TAURI && ct.path) { clearTimeout(ct._canvasSaveTimer); ct._canvasSaveTimer = setTimeout(() => saveCanvas(ct), 800); }
+  toast('Added “' + t.name + '” to the canvas');
+}
+
+// "Send to canvas…" — pick an open canvas or spin up a new one.
+function sendDocToCanvas(t, ev) {
+  if (!t || !t.path || t.kind === 'canvas') return;
+  const canvases = tabs.filter(x => x.kind === 'canvas');
+  const m = $('assign-menu');
+  let html = '<div class="am-label">Send to canvas</div>';
+  for (const c of canvases) {
+    html += `<button data-cv="${c.id}"><span class="am-dot" style="background:${FORMAT_BADGE.canvas.color}"></span>${escapeHtmlText(c.name)}</button>`;
+  }
+  html += `<button data-cv="__new"><span class="am-plus">+</span> New canvas</button>`;
+  m.innerHTML = html;
+  m.querySelectorAll('button[data-cv]').forEach(btn => btn.addEventListener('click', () => {
+    m.hidden = true;
+    const v = btn.dataset.cv;
+    if (v === '__new') { newCanvas(); addDocCardToCanvas(activeTab(), t); }
+    else { const ct = tabs.find(x => x.id === +v); if (ct) addDocCardToCanvas(ct, t); }
+  }));
+  showMenuAt(m, ev && ev.clientX ? ev.clientX : innerWidth / 2, ev && ev.clientY ? ev.clientY : 120);
+}
+
+// Save a binary blob (canvas PNG) to disk via the native dialog.
+async function saveBlobAs(blob, suggested) {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  if (TAURI) {
+    const path = await TAURI.core.invoke('plugin:dialog|save', { options: { defaultPath: suggested } });
+    if (!path) return false;
+    await TAURI.core.invoke('write_bytes', { path, contents: Array.from(bytes) });
+    return true;
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = suggested; a.click();
+  URL.revokeObjectURL(a.href);
+  return true;
+}
+
+async function exportCanvas(t, fmt) {
+  if (!window.SutraCanvas || _canvasTabId !== t.id) { toast('Open the canvas first'); return; }
+  const base = (t.name || 'Canvas').replace(/\.(excalidraw|canvas)$/i, '');
+  try {
+    if (fmt === 'png') {
+      const blob = await window.SutraCanvas.exportPNG(2);
+      if (blob && await saveBlobAs(blob, base + '.png')) toast('Exported ' + base + '.png');
+    } else if (fmt === 'svg') {
+      const svg = await window.SutraCanvas.exportSVG();
+      if (svg && await saveTextAs(svg, base + '.svg')) toast('Exported ' + base + '.svg');
+    } else if (fmt === 'excalidraw') {
+      const json = JSON.stringify(window.SutraCanvas.getScene());
+      if (await saveTextAs(json, base + '.excalidraw')) toast('Exported ' + base + '.excalidraw');
+    }
+  } catch (err) { console.error('canvas export failed', err); toast('Export failed'); }
+}
+
 /* ---------- Export / convert ---------- */
 
 const stem = (name) => name.replace(/\.[^.]+$/, '');
@@ -3108,6 +3942,9 @@ function htmlToMarkdown(html) {
   td.addRule('strikethrough2', { filter: ['del', 's', 'strike'], replacement: (c) => '~~' + c + '~~' });
   // keep <mark> highlights as inline HTML (valid markdown, renders in Sutra)
   td.keep(['mark']);
+  // underline has no markdown syntax — round-trip as inline <u> (GFM renders it,
+  // and children are still converted so <u>**bold**</u> survives)
+  td.addRule('underline', { filter: ['u'], replacement: (c) => c ? '<u>' + c + '</u>' : '' });
   // callouts → GitHub-style `> [!type]` blockquote (built directly so the
   // marker isn't escaped to \[!type\])
   td.addRule('callout', {
@@ -3251,6 +4088,50 @@ function startPresentation() {
   try { $('present-overlay').requestFullscreen && $('present-overlay').requestFullscreen(); } catch (_) {}
 }
 
+// --- Markdown → slide deck ---
+// Split a markdown doc into slide fragments: explicit `---` separators, else
+// fall back to splitting at each top-level (# / ##) heading so any doc presents.
+function buildMdSlides(t) {
+  let src = (t.text || '');
+  src = src.replace(/^﻿?---\r?\n[\s\S]*?\r?\n---\r?\n/, ''); // drop YAML frontmatter
+  let parts = src.split(/\r?\n[ \t]*---+[ \t]*(?=\r?\n)/).map(s => s.trim()).filter(Boolean);
+  if (parts.length < 2) {
+    // no explicit breaks — one slide per top heading (keep any preamble as slide 1)
+    const chunks = []; let cur = [];
+    for (const line of src.split(/\r?\n/)) {
+      if (/^#{1,2}\s/.test(line) && cur.some(l => l.trim())) { chunks.push(cur.join('\n')); cur = []; }
+      cur.push(line);
+    }
+    if (cur.length) chunks.push(cur.join('\n'));
+    parts = chunks.map(s => s.trim()).filter(Boolean);
+  }
+  return parts;
+}
+function mdSlideEls(frags) {
+  return frags.map((frag) => {
+    const el = document.createElement('div');
+    el.className = 'doc-page slide-md';
+    const body = document.createElement('div');
+    body.className = 'markdown-body';
+    body.innerHTML = DOMPurify.sanitize(md.render(frag));
+    el.appendChild(body);
+    return el;
+  });
+}
+function startMdPresentation() {
+  const t = activeTab();
+  if (!t || !TEXT_KINDS.includes(t.kind)) { toast('Open a Markdown document to present'); return; }
+  const frags = buildMdSlides(t);
+  if (!frags.length) { toast('Nothing to present'); return; }
+  presentState.slides = mdSlideEls(frags);
+  presentState.active = true;
+  presentState.idx = 0;
+  $('present-overlay').hidden = false;
+  $('present-overlay').classList.add('md-deck');
+  renderPresent();
+  try { $('present-overlay').requestFullscreen && $('present-overlay').requestFullscreen(); } catch (_) {}
+}
+
 function renderPresent() {
   const stage = $('present-stage');
   stage.innerHTML = '';
@@ -3274,6 +4155,7 @@ function presentNav(d) {
 function exitPresentation() {
   presentState.active = false;
   $('present-overlay').hidden = true;
+  $('present-overlay').classList.remove('md-deck');
   try { document.fullscreenElement && document.exitFullscreen(); } catch (_) {}
 }
 
@@ -3317,13 +4199,16 @@ function toastAction(msg, actionLabel, onAction, ms = 8000) {
 
 const IS_ANDROID = /android/i.test(navigator.userAgent);
 const EXPORT_FORMATS = [
-  // PDF rides the native print panel — not available on Android
-  { id: 'pdf', label: 'PDF', desc: 'Print-ready, themed', icon: 'doc', when: () => !IS_ANDROID },
-  { id: 'html', label: 'HTML', desc: 'Self-contained page', icon: 'doc', when: t => t.kind !== 'pptx' },
-  { id: 'md', label: 'Markdown', desc: 'Portable .md', icon: 'doc', when: () => true },
+  // canvas formats (real, via the Excalidraw bridge)
+  { id: 'png', label: 'PNG image', desc: 'Rasterised canvas @2×', icon: 'doc', when: t => t.kind === 'canvas' },
+  { id: 'svg', label: 'SVG image', desc: 'Vector canvas', icon: 'doc', when: t => t.kind === 'canvas' },
+  { id: 'excalidraw', label: 'Excalidraw', desc: 'Editable .excalidraw copy', icon: 'canvas', when: t => t.kind === 'canvas' },
+  // document formats
+  { id: 'pdf', label: 'PDF', desc: 'Print-ready, themed', icon: 'doc', when: t => !IS_ANDROID && t.kind !== 'canvas' },
+  { id: 'html', label: 'HTML', desc: 'Self-contained page', icon: 'doc', when: t => t.kind !== 'pptx' && t.kind !== 'canvas' },
+  { id: 'md', label: 'Markdown', desc: 'Portable .md', icon: 'doc', when: t => t.kind !== 'canvas' },
   { id: 'csv', label: 'CSV', desc: 'First sheet, comma-separated', icon: 'doc', when: t => t.kind === 'sheet' },
   { id: 'docx', label: 'Word', desc: 'Best-effort .docx', icon: 'doc', pandoc: true, soon: true },
-  { id: 'png', label: 'Image', desc: 'PNG of the page', icon: 'doc', soon: true },
   { id: 'epub', label: 'EPUB', desc: 'E-reader book', icon: 'book', pandoc: true, soon: true },
 ];
 const exportState = { fmt: 'pdf', font: 'current', size: 16, margin: 'normal', header: '', footer: '' };
@@ -3451,7 +4336,8 @@ function wireExportDialog() {
 async function exportActive(fmt, opts = {}) {
   const t = activeTab();
   if (!t) return;
-  if (fmt === 'docx' || fmt === 'epub' || fmt === 'png') { toast('“' + fmt.toUpperCase() + '” export needs the pandoc helper (coming soon)'); return; }
+  if (t.kind === 'canvas') { await exportCanvas(t, fmt); return; }
+  if (fmt === 'docx' || fmt === 'epub') { toast('“' + fmt.toUpperCase() + '” export needs the pandoc helper (coming soon)'); return; }
   try {
     let result;
     if (fmt === 'md') {
@@ -3619,7 +4505,12 @@ let graphOpen = false;
 let graphSim = null;
 
 function toggleGraph() {
-  if (!folder) return;
+  if (!folder) {
+    // no folder open → the graph has nothing to draw; say so instead of dying silently
+    toast('Knowledge graph needs a folder — open one first (⌘⇧O)');
+    if (TAURI && typeof openFolder === 'function') openFolder();
+    return;
+  }
   graphOpen = !graphOpen;
   if (graphOpen) renderGraph(); else renderActive();
 }
@@ -3854,7 +4745,7 @@ function aiMsgEl(role, content) {
   if (role === 'assistant') {
     const label = document.createElement('div');
     label.className = 'ai-label';
-    label.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 2l1.9 6.1L20 10l-6.1 1.9L12 18l-1.9-6.1L4 10l6.1-1.9z"/></svg> Sutra';
+    label.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 2l1.9 6.1L20 10l-6.1 1.9L12 18l-1.9-6.1L4 10l6.1-1.9z"/></svg> Vedrix';
     div.appendChild(label);
     const inner = document.createElement('div');
     inner.className = 'markdown-body';
@@ -4049,6 +4940,7 @@ function toggleAiPanel(wantOpen) {
   panel.hidden = wantOpen === true ? false : (wantOpen === false ? true : !panel.hidden);
   $('ai-btn').classList.toggle('on', !panel.hidden);
   $('ai-resize').hidden = panel.hidden || mobileMQ.matches; // no resize when full-screen sheet
+  if (typeof reclampDocks === 'function') reclampDocks();    // both docks share the width budget
   if (!panel.hidden) { renderAiChat(); $('ai-input').focus(); }
 }
 
@@ -4059,6 +4951,7 @@ function wireAi() {
     aiAsk('Summarize this document: key points, structure, and anything actionable. Use short sections.'));
   $('ai-translate').addEventListener('click', aiTranslate);
   $('ai-conceptmap').addEventListener('click', aiConceptMap);
+  $('ai-board').addEventListener('click', aiToCanvas);
   const send = () => {
     const v = $('ai-input').value.trim();
     if (!v) return;
@@ -4223,7 +5116,7 @@ function renderSettingsUI() {
   $('restore-session').checked = settings.restoreSession;
   renderAiSettings();
   syncTypePreview();
-  $('empty-title').textContent = settings.profileName ? `Welcome back, ${settings.profileName}` : 'Sutra';
+  $('empty-title').textContent = settings.profileName ? `Welcome back, ${settings.profileName}` : 'Vedrix';
 }
 
 // Live type sample in the Reading section — reflects font family + size instantly
@@ -4265,7 +5158,7 @@ function wireSettings() {
   // 'input' not 'change': closing the modal before blur must not discard the value
   $('profile-name').addEventListener('input', (e) => {
     settings.profileName = e.target.value.trim(); saveSettings();
-    $('empty-title').textContent = settings.profileName ? `Welcome back, ${settings.profileName}` : 'Sutra';
+    $('empty-title').textContent = settings.profileName ? `Welcome back, ${settings.profileName}` : 'Vedrix';
   });
   $('ai-preset').addEventListener('change', (e) => {
     const p = e.target.value;
@@ -4509,16 +5402,19 @@ function wireGlobal() {
     else if (mod && e.key === 'f') { e.preventDefault(); openFind(); }
     else if (mod && e.key === 'e') { e.preventDefault(); toggleEdit(); }
     else if (mod && e.key === 'm' && !e.altKey) { e.preventDefault(); toggleMap(); }
+    else if (mod && e.shiftKey && (e.key === 'p' || e.key === 'P')) { e.preventDefault(); const t = activeTab(); if (t && TEXT_KINDS.includes(t.kind)) startMdPresentation(); }
     else if (mod && e.key === 'p') { e.preventDefault(); appPrint(); }
     else if (mod && e.key === 's') {
       const t = activeTab();
       if (t && t.kind === 'canvas') { e.preventDefault(); saveCanvas(t); }
+      else if (t && !t.path && TEXT_KINDS.includes(t.kind)) { e.preventDefault(); if ((t.editSurface || 'rich') === 'rich') t.text = richToMarkdown(t); saveDocAs(t); }
     }
     else if (mod && e.key === 'b') {
       e.preventDefault();
       if (isRichEditing()) EDITOR_CMDS.bold(); else toggleSidebar();
     }
     else if (mod && e.key === 'i' && isRichEditing()) { e.preventDefault(); EDITOR_CMDS.italic(); }
+    else if (mod && e.key === 'u' && isRichEditing()) { e.preventDefault(); EDITOR_CMDS.underline(); }
     else if (mod && e.key === 'k') { e.preventDefault(); if (isRichEditing()) openLinkPop(); else openCmd(); }
     else if (mod && !e.shiftKey && e.key === 'z' && isRichEditing()) { e.preventDefault(); editUndo(); }
     else if (mod && e.shiftKey && (e.key === 'z' || e.key === 'Z') && isRichEditing()) { e.preventDefault(); editRedo(); }
@@ -4552,7 +5448,10 @@ function wireGlobal() {
   });
   wireFind();
   wireCmd();
+  wireAnnotations();
+  wireSelMenu();
   wireEditorToolbar();
+  wireInspector();
   wireSelBubble();
   wireRichTyping();
   wireBlockDrag();
@@ -4582,49 +5481,7 @@ function wireGlobal() {
     }, { passive: true });
   }
 
-  // sidebar resize handle (nav-rail aware: measure from the sidebar's own left)
-  const handle = $('toc-resize');
-  handle.addEventListener('mousedown', (e) => {
-    e.preventDefault();
-    handle.classList.add('dragging');
-    const sbLeft = $('sidebar').getBoundingClientRect().left;
-    const move = (ev) => {
-      const w = Math.min(520, Math.max(180, ev.clientX - sbLeft));
-      $('sidebar').style.width = w + 'px';
-      settings.tocWidth = w;
-    };
-    const up = () => {
-      handle.classList.remove('dragging');
-      saveSettings();
-      document.removeEventListener('mousemove', move);
-      document.removeEventListener('mouseup', up);
-    };
-    document.addEventListener('mousemove', move);
-    document.addEventListener('mouseup', up);
-  });
-  if (settings.tocWidth) $('sidebar').style.width = settings.tocWidth + 'px';
-
-  // AI panel resize handle (right dock: drag its left edge)
-  const aiHandle = $('ai-resize');
-  aiHandle.addEventListener('mousedown', (e) => {
-    e.preventDefault();
-    aiHandle.classList.add('dragging');
-    const rightEdge = $('ai-panel').getBoundingClientRect().right;
-    const move = (ev) => {
-      const w = Math.min(640, Math.max(280, rightEdge - ev.clientX));
-      $('ai-panel').style.width = w + 'px';
-      settings.aiWidth = w;
-    };
-    const up = () => {
-      aiHandle.classList.remove('dragging');
-      saveSettings();
-      document.removeEventListener('mousemove', move);
-      document.removeEventListener('mouseup', up);
-    };
-    document.addEventListener('mousemove', move);
-    document.addEventListener('mouseup', up);
-  });
-  if (settings.aiWidth) $('ai-panel').style.width = settings.aiWidth + 'px';
+  wireDockResizers();
 
   // browser drag & drop (Tauri intercepts drops natively — see wireTauri)
   if (!TAURI) {

@@ -4,10 +4,9 @@ This document exercises every feature the viewer supports. If everything below l
 
 ## Text formatting
 
-**Bold**, *italic*, ~~strikethrough~~, `inline code`, and a [link to the Markdown guide](https://www.markdownguide.org). Typographer is on, so "smart quotes" and em-dashes -- like this -- are converted automatically.
+**Bold**, _italic_, ~~strikethrough~~, `inline code`, and a [link to the Markdown guide](https://www.markdownguide.org). Typographer is on, so “smart quotes” and em-dashes – like this – are converted automatically.
 
-> Blockquotes work too.
-> — including multi-line ones with attribution.
+> Blockquotes work too. — including multi-line ones with attribution.
 
 ## Code blocks
 
@@ -36,7 +35,7 @@ brew install something && echo "done"
 ## Tables
 
 | Feature | Status | Notes |
-|---|---|---|
+| --- | --- | --- |
 | GFM tables | ✅ | You are looking at one |
 | Syntax highlighting | ✅ | highlight.js |
 | Task lists | ✅ | See below |
@@ -44,19 +43,19 @@ brew install something && echo "done"
 
 ## Task lists
 
-- [x] Build rendering pipeline
-- [x] Add table of contents
-- [ ] Wrap in a native macOS app
-- [ ] Register `.md` file association
+-   [x]  Build rendering pipeline
+-   [x]  Add table of contents
+-   [ ]  Wrap in a native macOS app
+-   [ ]  Register `.md` file association
 
 ## Lists and nesting
 
-1. First ordered item
-2. Second item
-   - Nested bullet
-   - Another one
-     1. Deeply nested ordered
-3. Third item
+1.  First ordered item
+2.  Second item
+    -   Nested bullet
+    -   Another one
+        1.  Deeply nested ordered
+3.  Third item
 
 ## Headings for the TOC
 
@@ -83,19 +82,16 @@ flowchart LR
 
 Inline math like $E = mc^2$ works, and so do display equations:
 
-$$\int_{-\infty}^{\infty} e^{-x^2}\,dx = \sqrt{\pi}$$
+$$\\int\_{-\\infty}^{\\infty} e^{-x^2},dx = \\sqrt{\\pi}$$
 
 ## Horizontal rule
 
----
+* * *
 
 ## HTML passthrough (sanitized)
 
-<details>
-<summary>Click to expand — details/summary elements work</summary>
+Click to expand — details/summary elements work
 
 Hidden content inside a `details` block. Script tags, on the other hand, are stripped by DOMPurify.
 
-</details>
-
-That's everything. 🎉
+That’s everything. 🎉

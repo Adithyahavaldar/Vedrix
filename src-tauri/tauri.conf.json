@@ -1,6 +1,6 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Sutra",
+  "productName": "Vedrix",
   "version": "0.9.0",
   "identifier": "com.adithya.sutra",
   "build": {
@@ -10,7 +10,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Sutra",
+        "title": "Vedrix",
         "width": 1160,
         "height": 820,
         "minWidth": 640,

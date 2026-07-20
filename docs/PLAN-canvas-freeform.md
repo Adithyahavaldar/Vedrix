@@ -53,8 +53,26 @@ app.js never imports React; it calls these.
     - **Data path verified (browser):** newCanvas→canvas tab+pane→lazy mount→inject element→getScene serialize (529 B)→parseScene round-trip = the exact save/reopen logic. ✓
     - Fonts trimmed 13 MB→560 KB (dropped Xiaolai CJK; build now excludes it).
     - **Remaining for a "complete" Phase A:** confirm a real hand-drawn stroke persists across save→reopen with a human (or non-synthetic) pointer; wire canvas into the **export dialog** (PNG/SVG/.excalidraw) — currently ⌘S saves `.excalidraw` only.
+  - **Phase A gaps CLOSED + extras (2026-07-13, local build, NOT pushed):**
+    - **Export dialog** now canvas-aware: PNG (via `SutraCanvas.exportPNG`, new Rust `write_bytes` for binary) / SVG / editable `.excalidraw`; doc formats hidden for canvas. Verified: dialog shows the 3 formats; exportPNG returns a valid 13 KB PNG (magic bytes ok), exportSVG valid — in browser. write_bytes compiles; disk-write itself is the only unexercised (trivial) link.
+    - **Reopen bug fixed:** `loadTauriContent`/`openBrowserFile` read `.excalidraw` as TEXT (was bytes → blank on reopen); file-picker filters + `<input accept>` include `excalidraw`/`canvas`.
+    - **NEW — background patterns:** custom `.sutra-cbg` layer behind Excalidraw (viewBackgroundColor transparent), synced to pan/zoom via onChange. None / Grid / Dots. Renders crisply in real WKWebView. New canvases default to Dots (blankScene appState.sutraBackground). Saved in the file.
+    - **NEW — Canva-style colour strip:** `#canvas-controls` bottom-center bar with the None/Grid/Dots segment + 14 swatches + custom-colour picker; `SutraCanvas.setStrokeColor/setFillColor` apply to selection and to the next element.
+    - Bridge additions: setBackground/getBackground, setStrokeColor, setFillColor; exports use a solid bg (transparent-on-screen would export blank).
 - **Phase B — Sutra glue.** Canvas kind in Files/Projects/recents/Home with badge; New-canvas entry points; export-dialog wiring; Android WebView smoke test (touch/pen). *Verify: canvas shows in Projects; touch works on device.*
 - **Phase C — Cross-linking (the hybrid payoff, incremental).** A canvas element links to / embeds a Sutra document (open on click); "Send to canvas" from a doc; later: AI-panel awareness of the active canvas.
+  - **DONE (2026-07-13, local build, NOT pushed):**
+    - **Doc cards:** `SutraCanvas.addDocCard({name, link, color})` — rounded rect + bound label (via `convertToExcalidrawElements`), placed at the viewport centre (staggered), badge-coloured per doc kind, carrying a `sutra://open?path=…` link (label inherits it, so the whole card is clickable).
+    - **Click-to-open:** Excalidraw `onLinkOpen` → `window.SutraCanvasOnLink` → switches to the open tab or `openTauriPath`; real http links unaffected.
+    - **"Send to canvas…"** from the ⌘K palette and the tab context menu → chooser (existing canvases + "New canvas") → card added, canvas marked dirty + autosaved.
+    - **Verified programmatically (browser):** chooser lists canvases; new-canvas path creates rect+label with correct link; link survives serialize→parseScene (persists in the file); `SutraCanvasOnLink` returns to the doc tab; palette shows both commands. Real-app screen test intentionally skipped per user instruction.
+    - Later (unplanned): AI-panel awareness of the active canvas; drag-from-Files onto canvas.
+  - **Control-bar rework after user feedback (2026-07-13, local, NOT pushed):**
+    - User couldn't change a shape's background: the strip only ever set STROKE (machinery was fine — verified fill/stroke both apply to a selection). Added a **Fill | Stroke** mode segment (Fill default) + a transparent checkerboard swatch ("no fill").
+    - Bar is now **optional**: ✕ hides it, a small palette chip (bottom-right) brings it back; persisted as `settings.canvasBarHidden`.
+    - **Excalidraw control column moved to the RIGHT** (user preference): `.App-menu_top` mirrored via the rtl-grid trick; the properties island's JS-computed inline `left` overridden with stylesheet `!important` (`left:auto; right:12px`) — inline styles lose to author `!important`; hamburger dropdown pinned on-screen the same way. Verified: island fully on-screen at right (1212–1412 @1440w), dropdown on-screen, fill/transparent/stroke all apply, close/reopen persists.
+    - GOTCHA (browser eval): a timed-out javascript_tool eval KEEPS RUNNING in-page — its later clicks polluted the next eval's state (mode was left on 'stroke'). Re-check state before chaining evals.
+    - Bar-wrap fix (user screenshot: ✕ + divider orphaned on a second row): close button is now `position:absolute` at the bar's top-right corner (out of the flex flow, can never wrap); its divider removed; `.cc-swatches` wraps within its own group so narrow windows get [toggles row / swatch row] instead of ragged wrapping.
 
 ## Risks & mitigations
 - **React 19 ESM → IIFE bundling**: mitigated by bundling React *into* the artifact via esbuild (tested standalone before wiring).

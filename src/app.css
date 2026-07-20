@@ -312,7 +312,7 @@ html[data-font="mono"] .markdown-body { font-family: 'Geist Mono', ui-monospace,
         Geist Mono code) — overrides the vendored GitHub markdown CSS ---- */
 .markdown-body {
   font-family: 'Hanken Grotesk', -apple-system, system-ui, sans-serif;
-  font-size: 16.5px; line-height: 1.7; color: var(--fg);
+  font-size: 16.5px; line-height: var(--reader-lh, 1.7); color: var(--fg);
 }
 .markdown-body h1, .markdown-body h2 {
   font-family: 'Newsreader', Georgia, serif; font-weight: 600;
@@ -407,9 +407,20 @@ html[data-font="mono"] .markdown-body { font-family: 'Geist Mono', ui-monospace,
   background: transparent;
   margin-left: -3px;
   z-index: 30;
+  position: relative;
+  touch-action: none;            /* pointer events own the gesture (touch/pen) */
+}
+/* generous invisible grab strip — easy to hit without a fat visible divider */
+#toc-resize::before, #ai-resize::before {
+  content: ''; position: absolute; top: 0; bottom: 0; left: -4px; right: -4px;
 }
 #toc-resize:hover, #toc-resize.dragging { background: color-mix(in srgb, var(--accent) 45%, transparent); }
 #sidebar.hidden + #toc-resize { display: none; }
+/* while dragging: no text selection, no cursor flicker, no iframe stealing the pointer */
+body.dock-resizing { cursor: col-resize; user-select: none; -webkit-user-select: none; }
+body.dock-resizing iframe, body.dock-resizing #canvasview { pointer-events: none; }
+/* dragged near the edge — letting go here closes the dock */
+#sidebar.will-collapse, #ai-panel.will-collapse { opacity: .45; transition: opacity .1s; }
 
 /* ---- Empty state ---- */
 #empty {
@@ -422,11 +433,11 @@ html[data-font="mono"] .markdown-body { font-family: 'Geist Mono', ui-monospace,
 .empty-mark {
   width: 58px; height: 58px; border-radius: 17px;
   background: var(--accent); color: var(--accent-fg);
-  font: 600 32px 'Newsreader', Georgia, serif;
   display: flex; align-items: center; justify-content: center;
   margin-bottom: 6px;
   box-shadow: 0 10px 26px -10px color-mix(in srgb, var(--accent) 60%, transparent);
 }
+.empty-mark svg { width: 34px; height: 34px; }
 #empty h2 { margin: 0; font: 700 24px 'Hanken Grotesk'; letter-spacing: -.02em; color: var(--fg); }
 #empty p { margin: 0; font-size: 14px; }
 .empty-sub { max-width: 360px; text-align: center; line-height: 1.55; font-size: 13.5px !important; }
@@ -579,9 +590,95 @@ body.dragover::after {
 #ai-panel[hidden] { display: none; }
 #ai-resize {
   flex: 0 0 5px; cursor: col-resize; background: transparent; margin-right: -3px; z-index: 30;
+  position: relative; touch-action: none;
 }
 #ai-resize[hidden] { display: none; }
 #ai-resize:hover, #ai-resize.dragging { background: color-mix(in srgb, var(--accent) 45%, transparent); }
+
+/* ---- Editor inspector (Scribe-style right panel, wide-screen edit mode) ---- */
+#editor-inspector {
+  width: 264px; flex: 0 0 auto;
+  display: flex; flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: var(--panel);
+  min-width: 0;
+}
+#editor-inspector[hidden] { display: none; }
+.insp-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 14px 10px; border-bottom: 1px solid var(--border);
+}
+.insp-title { font-size: 12.5px; font-weight: 650; letter-spacing: .02em; color: var(--fg); }
+.insp-undo { margin-left: auto; display: flex; gap: 2px; }
+.insp-ic svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.insp-head .insp-ic {
+  width: 28px; height: 28px; display: grid; place-items: center;
+  border: none; background: transparent; border-radius: 7px; color: var(--text-muted); cursor: pointer;
+}
+.insp-head .insp-ic:hover { background: var(--hover); color: var(--fg); }
+.insp-scroll { flex: 1 1 0; overflow-y: auto; padding: 14px; }
+.insp-scroll::-webkit-scrollbar { width: 0; }
+.insp-sec { margin-bottom: 18px; }
+.insp-sec:last-child { margin-bottom: 4px; }
+.insp-label {
+  font-size: 10.5px; font-weight: 650; letter-spacing: .07em; text-transform: uppercase;
+  color: var(--text-muted); margin: 0 2px 8px;
+}
+
+/* Style (font family) cards */
+.insp-styles { display: flex; gap: 8px; }
+.insp-style {
+  flex: 1 1 0; display: flex; flex-direction: column; align-items: center; gap: 5px;
+  padding: 10px 4px 8px; border: 1px solid var(--border); border-radius: 11px;
+  background: var(--bg); cursor: pointer; transition: border-color .12s, background .12s;
+}
+.insp-style:hover { background: var(--hover); }
+.insp-style .is-aa { font-size: 21px; line-height: 1; color: var(--fg); }
+.insp-style .is-name { font-size: 10.5px; color: var(--text-muted); }
+.insp-style.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.insp-style.on .is-name { color: var(--accent); }
+
+/* Icon/letter button grids */
+.insp-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.insp-btn {
+  height: 34px; display: grid; place-items: center;
+  border: 1px solid var(--border); border-radius: 9px; background: var(--bg);
+  color: var(--fg); font-size: 14px; cursor: pointer; transition: background .12s, border-color .12s, color .12s;
+}
+.insp-btn:hover { background: var(--hover); }
+.insp-btn.on { background: color-mix(in srgb, var(--accent) 16%, transparent); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); color: var(--accent); }
+.insp-btn.insp-mono { font-family: ui-monospace, monospace; font-size: 11.5px; }
+.insp-btn.insp-ic svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.insp-btn mark { background: color-mix(in srgb, #ffd84d 65%, transparent); color: inherit; border-radius: 3px; }
+
+/* Paragraph */
+.insp-select {
+  width: 100%; height: 34px; padding: 0 10px; margin-bottom: 0;
+  border: 1px solid var(--border); border-radius: 9px; background: var(--bg); color: var(--fg);
+  font: inherit; font-size: 13px; cursor: pointer; -webkit-appearance: none; appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2'><path d='M6 9l6 6 6-6'/></svg>");
+  background-repeat: no-repeat; background-position: right 9px center; background-size: 15px;
+}
+
+/* Text rows: label + control */
+.insp-row { display: flex; align-items: center; justify-content: space-between; padding: 5px 2px; }
+.insp-row-name { font-size: 12.5px; color: var(--fg); }
+.insp-stepper {
+  display: inline-flex; align-items: center; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--bg);
+}
+.insp-stepper button {
+  width: 28px; height: 28px; border: none; background: transparent; color: var(--fg);
+  font-size: 16px; line-height: 1; cursor: pointer;
+}
+.insp-stepper button:hover { background: var(--hover); }
+.insp-stepper span { min-width: 40px; text-align: center; font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.insp-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--bg); }
+.insp-seg button {
+  width: 30px; height: 28px; border: none; background: transparent; color: var(--text-muted);
+  font-size: 13px; cursor: pointer;
+}
+.insp-seg button:hover { background: var(--hover); }
+.insp-seg button.sel { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
 #ai-head {
   display: flex; align-items: center; gap: 8px;
   padding: 12px 12px 11px;
@@ -646,11 +743,77 @@ body.dragover::after {
 /* ---- Mind map view ---- */
 #mapview { flex: 1; position: relative; min-width: 0; background: var(--bg); }
 #mapview[hidden] { display: none; }
-#canvasview { flex: 1; position: relative; min-width: 0; min-height: 0; background: var(--bg); }
+#canvasview { flex: 1; position: relative; min-width: 0; min-height: 0; background: #ffffff; }
+#canvasview[data-theme="dark"] { background: #1e1e1e; }
 #canvasview[hidden] { display: none; }
 .home-head-actions { display: flex; gap: 8px; align-items: center; }
-/* Excalidraw fills the pane; keep its own toolbar/UI, drop the app scrollbars */
-#canvasview .excalidraw { width: 100%; height: 100%; }
+#canvasview .excalidraw { width: 100%; height: 100%; background: transparent; }
+
+/* Sutra background-pattern layer (behind Excalidraw, pans/zooms with it) */
+.sutra-cbg { position: absolute; inset: 0; pointer-events: none; z-index: 0; }
+.sutra-cbg[data-bg="none"] { background-image: none; }
+.sutra-cbg[data-bg="dots"] { background-image: radial-gradient(rgba(30,30,30,.20) 1.3px, transparent 1.4px); }
+.sutra-cbg[data-bg="grid"] { background-image:
+  linear-gradient(rgba(30,30,30,.13) 1px, transparent 1px),
+  linear-gradient(90deg, rgba(30,30,30,.13) 1px, transparent 1px); }
+#canvasview[data-theme="dark"] .sutra-cbg[data-bg="dots"] { background-image: radial-gradient(rgba(255,255,255,.18) 1.3px, transparent 1.4px); }
+#canvasview[data-theme="dark"] .sutra-cbg[data-bg="grid"] { background-image:
+  linear-gradient(rgba(255,255,255,.11) 1px, transparent 1px),
+  linear-gradient(90deg, rgba(255,255,255,.11) 1px, transparent 1px); }
+
+/* Sutra canvas control bar (bottom-center): background toggle + colour strip */
+#canvas-controls {
+  position: absolute; bottom: 66px; left: 50%; transform: translateX(-50%);
+  z-index: 6; display: flex; align-items: center; gap: 10px;
+  padding: 6px 8px; border-radius: 12px;
+  background: var(--panel); border: 1px solid var(--border);
+  box-shadow: 0 8px 26px -10px rgba(0,0,0,.4);
+  max-width: calc(100% - 40px); flex-wrap: wrap; justify-content: center;
+}
+#canvas-controls .cc-seg { display: inline-flex; gap: 2px; background: color-mix(in srgb, var(--fg) 8%, transparent); border-radius: 999px; padding: 3px; }
+#canvas-controls .cc-seg button { border: none; background: transparent; color: var(--text-muted); font: inherit; font-size: 11.5px; padding: 4px 11px; border-radius: 999px; cursor: pointer; }
+#canvas-controls .cc-seg button.sel { background: var(--panel); color: var(--fg); font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,.2); }
+#canvas-controls .cc-div { width: 1px; align-self: stretch; background: var(--border); margin: 2px 0; }
+#canvas-controls .cc-swatches { display: inline-flex; gap: 5px; align-items: center; flex-wrap: wrap; justify-content: center; row-gap: 5px; max-width: 100%; }
+#canvas-controls .cc-sw { width: 20px; height: 20px; border-radius: 6px; border: 1.5px solid rgba(0,0,0,.15); cursor: pointer; padding: 0; }
+#canvas-controls .cc-sw:hover { transform: scale(1.12); }
+#canvas-controls .cc-sw.sel { box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--accent); }
+#canvas-controls .cc-more { width: 22px; height: 22px; border-radius: 6px; border: 1.5px dashed var(--border); background: transparent; cursor: pointer; display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden; color: var(--text-muted); }
+#canvas-controls .cc-more input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+/* transparent ("no fill") swatch — checkerboard */
+#canvas-controls .cc-clear { background: conic-gradient(#ccc 0 25%, #fff 0 50%, #ccc 0 75%, #fff 0) 0 0/10px 10px; }
+#canvas-controls .cc-close {
+  position: absolute; top: -8px; right: -8px;
+  width: 20px; height: 20px; border-radius: 50%;
+  border: 1px solid var(--border); background: var(--panel);
+  color: var(--text-muted); font-size: 10px; line-height: 1; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 2px 8px -3px rgba(0,0,0,.35);
+}
+#canvas-controls .cc-close:hover { color: var(--fg); border-color: var(--accent); }
+#canvas-controls[hidden] { display: none; }
+/* reopen chip when the bar is hidden */
+#canvas-bar-chip {
+  position: absolute; bottom: 70px; right: 16px; z-index: 6;
+  width: 36px; height: 36px; border-radius: 50%;
+  border: 1px solid var(--border); background: var(--panel); color: var(--fg);
+  display: flex; align-items: center; justify-content: center; cursor: pointer;
+  box-shadow: 0 6px 18px -8px rgba(0,0,0,.4);
+}
+#canvas-bar-chip[hidden] { display: none; }
+#canvas-bar-chip:hover { color: var(--accent); }
+
+/* Excalidraw control column on the RIGHT (user preference).
+   The top bar is a grid — mirror it with the rtl trick (children reset to
+   ltr), then hug the islands to the right edge of their cell. */
+#canvasview .App-menu_top { direction: rtl; }
+#canvasview .App-menu_top > * { direction: ltr; }
+#canvasview .App-menu_top__left { align-items: flex-end; }
+/* the properties island gets a JS-computed inline `left` — stylesheet
+   !important outranks inline styles, so pin it to the right edge instead */
+#canvasview .selected-shape-actions .Island { left: auto !important; right: 12px !important; }
+/* hamburger dropdown now opens from a right-edge trigger — keep it on-screen */
+#canvasview .App-menu_top__left .dropdown-menu { left: auto !important; right: 0 !important; }
 #map-svg { width: 100%; height: 100%; color: var(--fg); font: 300 15px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; }
 #map-svg foreignObject { color: var(--fg); }
 #map-toolbar {
@@ -945,6 +1108,31 @@ body.editing #scroller { flex: 1; }
   z-index: 72;
 }
 #sel-bubble[hidden] { display: none; }
+#sel-bubble .sb-div { width: 1px; background: var(--border); margin: 3px 2px; }
+#sel-bubble .sb-ai { color: var(--accent) !important; font-weight: 600; font-size: 12px !important; gap: 4px; }
+#sel-bubble .sb-ai svg { width: 13px; height: 13px; fill: var(--accent); }
+#sel-bubble .sb-ai:hover { background: color-mix(in srgb, var(--accent) 14%, transparent) !important; }
+
+/* AI selection menu (Actions + Rewrite) — Scribe-style dropdown */
+#sel-menu {
+  position: absolute; z-index: 74; min-width: 232px; max-width: 300px;
+  padding: 6px; border-radius: 12px;
+  background: var(--panel); border: 1px solid var(--border);
+  box-shadow: 0 14px 40px -12px rgba(0,0,0,.45);
+}
+#sel-menu[hidden] { display: none; }
+#sel-menu .sm-label { padding: 8px 10px 4px; font: 600 10.5px 'Geist Mono', monospace; letter-spacing: .05em; text-transform: uppercase; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
+#sel-menu .sm-ai { font: 600 9px 'Hanken Grotesk'; letter-spacing: .04em; color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); padding: 1px 5px; border-radius: 5px; }
+#sel-menu button {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+  padding: 8px 10px; border: none; border-radius: 8px;
+  background: transparent; color: var(--fg); font: inherit; font-size: 13px; cursor: pointer;
+}
+#sel-menu button:hover { background: var(--hover); }
+#sel-menu button svg { width: 16px; height: 16px; flex: 0 0 auto; fill: none; stroke: var(--text-muted); stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+#sel-menu button[data-rw] svg { stroke: var(--accent); }
+#sel-menu button:hover svg { stroke: var(--fg); }
+#sel-menu button[data-rw]:hover svg { stroke: var(--accent); }
 #sel-bubble button {
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 30px; height: 30px; padding: 0 7px;
@@ -967,8 +1155,9 @@ body.editing #scroller { flex: 1; }
 .nr-mark {
   width: 34px; height: 34px; margin-bottom: 8px; border: none; border-radius: 10px;
   background: var(--accent); color: var(--accent-fg);
-  font: 700 16px 'Newsreader', serif; cursor: pointer;
+  cursor: pointer; display: grid; place-items: center;
 }
+.nr-mark svg { width: 20px; height: 20px; }
 .nr-btn {
   width: 40px; height: 40px; border: none; border-radius: 11px;
   background: transparent; color: var(--text-muted); cursor: pointer;
@@ -1124,6 +1313,26 @@ body.editing #scroller { flex: 1; }
 #present-next-thumb { display: flex; align-items: center; }
 .present-thumb { width: 96px; height: 54px; object-fit: contain; border-radius: 3px; overflow: hidden; background: #fff; transform-origin: center; box-shadow: 0 2px 8px rgba(0,0,0,.4); }
 #present-exit { font-size: 12.5px; padding: 7px 14px; border-radius: 8px; background: #2a282f; }
+
+/* Markdown deck: 16:9 slides with the reader's typography, scaled up */
+#present-overlay.md-deck { background: #14131a; }
+.present-slide.slide-md {
+  width: min(92vw, calc(84vh * 16 / 9)); aspect-ratio: 16 / 9; height: auto; max-height: 84vh;
+  background: #fff; border-radius: 10px; overflow: hidden;
+  display: flex; flex-direction: column; justify-content: center;
+}
+.present-slide.slide-md .markdown-body {
+  padding: 5% 7%; font-size: clamp(15px, 2.1vh, 26px); line-height: 1.5;
+  max-height: 100%; overflow: hidden; color: #1e1e1e; background: transparent;
+}
+.present-slide.slide-md .markdown-body > :first-child { margin-top: 0; }
+.present-slide.slide-md .markdown-body h1 { font-size: 2.4em; margin: 0 0 .5em; }
+.present-slide.slide-md .markdown-body h2 { font-size: 1.9em; margin: 0 0 .5em; }
+.present-slide.slide-md .markdown-body h3 { font-size: 1.4em; }
+.present-slide.slide-md .markdown-body pre { font-size: .8em; }
+.present-slide.slide-md .markdown-body img { max-height: 46vh; object-fit: contain; }
+.present-thumb.slide-md { aspect-ratio: 16/9; height: 54px; width: auto; }
+.present-thumb.slide-md .markdown-body { padding: 6%; font-size: 4px; color: #1e1e1e; }
 #present-exit:hover { background: #3a373f; }
 
 /* ---- Toast ---- */
@@ -1280,6 +1489,59 @@ body.editing #scroller { flex: 1; }
 .cmd-row .cmd-sw { display: inline-flex; gap: 2px; }
 .cmd-row .cmd-sw i { width: 9px; height: 14px; border-radius: 2px; display: inline-block; }
 #cmd-list .cmd-none { padding: 18px; text-align: center; color: var(--text-muted); font-size: 13px; }
+/* content-search section + result rows */
+#cmd-list .cmd-section {
+  padding: 10px 10px 4px; font: 600 10.5px 'Geist Mono', monospace;
+  letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted);
+}
+.cmd-row.cmd-search { align-items: flex-start; }
+.cmd-row.cmd-search .cmd-ic { width: 26px; height: 26px; margin-top: 1px; }
+.cmd-row .cmd-hit { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.cmd-row .cmd-hit-name { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmd-row .cmd-hit-snip { font-size: 11.5px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmd-row .cmd-hit-snip mark { background: color-mix(in srgb, var(--accent) 30%, transparent); color: var(--fg); border-radius: 2px; padding: 0 1px; }
+
+/* ---- Annotations: highlights, popover, notes ---- */
+.markdown-body .sutra-hl {
+  background: color-mix(in srgb, var(--hlc, #ffd43b) 42%, transparent);
+  color: inherit; border-radius: 2px; cursor: pointer;
+  box-decoration-break: clone; -webkit-box-decoration-break: clone;
+}
+.markdown-body .sutra-hl.has-note { border-bottom: 2px solid color-mix(in srgb, var(--hlc, #ffd43b) 90%, #000); }
+.markdown-body .sutra-hl.flash { animation: hl-flash .9s ease; }
+@keyframes hl-flash { 0%,100% { background: color-mix(in srgb, var(--hlc,#ffd43b) 42%, transparent); } 40% { background: var(--hlc, #ffd43b); } }
+
+#hl-pop, #hl-note-pop { position: absolute; z-index: 120; }
+#hl-pop {
+  display: flex; align-items: center; gap: 4px;
+  padding: 5px 7px; border-radius: 10px;
+  background: var(--panel); border: 1px solid var(--border);
+  box-shadow: 0 8px 24px -8px rgba(0,0,0,.45);
+}
+#hl-pop[hidden], #hl-note-pop[hidden] { display: none; }
+#hl-pop .hl-sw { width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid rgba(0,0,0,.12); cursor: pointer; padding: 0; }
+#hl-pop .hl-sw:hover { transform: scale(1.15); }
+#hl-pop .hl-div { width: 1px; height: 18px; background: var(--border); margin: 0 2px; }
+#hl-pop .hl-act { width: 24px; height: 24px; border: none; background: transparent; color: var(--text-muted); cursor: pointer; border-radius: 6px; display: flex; align-items: center; justify-content: center; }
+#hl-pop .hl-act:hover { background: var(--hover); color: var(--fg); }
+#hl-pop .hl-act svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+#hl-pop .hl-rm:hover { color: #e03131; }
+#hl-note-pop { padding: 6px; border-radius: 10px; background: var(--panel); border: 1px solid var(--border); box-shadow: 0 8px 24px -8px rgba(0,0,0,.45); }
+#hl-note-text { width: 240px; font: inherit; font-size: 13px; padding: 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg); color: var(--fg); resize: vertical; outline: none; }
+#hl-note-text:focus { border-color: var(--accent); }
+
+#notes-pane { flex: 1; overflow-y: auto; padding: 8px; }
+#notes-pane[hidden] { display: none; }
+#notes-pane .notes-empty { padding: 20px 14px; color: var(--text-muted); font-size: 12.5px; line-height: 1.5; text-align: center; }
+.note-row { display: flex; gap: 8px; padding: 9px 8px; border-radius: 8px; cursor: default; }
+.note-row:hover { background: var(--hover); }
+.note-row:hover .note-del { opacity: .7; }
+.note-dot { width: 10px; height: 10px; border-radius: 3px; flex: 0 0 auto; margin-top: 3px; }
+.note-body { flex: 1; min-width: 0; cursor: pointer; }
+.note-quote { font-size: 12.5px; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.note-text { margin-top: 4px; font-size: 12px; color: var(--text-muted); border-left: 2px solid var(--border); padding-left: 7px; }
+.note-del { opacity: 0; border: none; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 12px; padding: 2px 5px; border-radius: 5px; flex: 0 0 auto; align-self: flex-start; }
+.note-del:hover { opacity: 1 !important; color: #e03131; background: var(--card); }
 
 /* ---- Slash menu ---- */
 #slash-menu {
