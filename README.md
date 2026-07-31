@@ -1,27 +1,37 @@
-# Sutra (formerly Markdown Viewer)
+# Vedrix
 
-A fast, lightweight macOS app for *reading* Markdown files. Double-click any `.md` file in Finder and see it rendered GitHub-style — headings, tables, task lists, syntax-highlighted code — with a table of contents sidebar, automatic dark mode, and live reload when the file changes on disk.
+*(formerly Sutra / Markdown Viewer)*
 
-Built with [Tauri](https://tauri.app) (native WebView shell, ~10 MB app) around a dependency-light web core: `markdown-it` + `highlight.js` + `DOMPurify` + GitHub markdown CSS, all vendored locally in [src/vendor](src/vendor) so the app works fully offline.
+One quiet home for everything you read, annotate, and write — **Markdown, PDF, Word, PowerPoint, Excel, and plain text** — in a fast, offline, native app. Double-click any supported file in Finder and it opens rendered and readable, with a table-of-contents sidebar, automatic dark mode, and live reload when the file changes on disk.
+
+Built with [Tauri 2](https://tauri.app) (native WebView shell, ~10 MB app) around a dependency-light web core: `markdown-it` + `highlight.js` + `DOMPurify` + GitHub markdown CSS, with PDF.js, mammoth, SheetJS, Turndown, markmap, KaTeX, Mermaid and Excalidraw all vendored locally in [src/vendor](src/vendor) so the app works fully offline. Runs on macOS, Windows and Linux desktops, and on Android.
 
 ## Features
 
-- **GitHub Flavored Markdown** — tables, task lists, strikethrough, autolinks, typographer quotes
+**Read**
+- **GitHub Flavored Markdown** — tables, task lists, strikethrough, autolinks, typographer quotes, KaTeX math and Mermaid diagrams
 - **Syntax highlighting** for fenced code blocks (highlight.js)
+- **More formats**: PDF (PDF.js 6 with WASM image decoders, lazy page rendering, outline sidebar), PowerPoint `.pptx` (positioned text + images, slide titles in the sidebar), Word `.docx` (mammoth.js), Excel/CSV (SheetJS), plain text/JSON/logs; legacy `.doc`/`.ppt` get an "Open in default app" fallback
 - **Chrome-style tabs** — multiple files at once, ⌘W to close, session restored on relaunch
-- **More formats**: PDF (PDF.js 6 with WASM image decoders, lazy page rendering, and a contents sidebar from the PDF outline or page list), PowerPoint `.pptx` (built-in slide renderer: positioned text + images, slide titles in the sidebar), Word `.docx` (mammoth.js), Excel/CSV (SheetJS), plain text/JSON/logs; legacy `.doc`/`.ppt` get an "Open in default app" fallback
-- **Mind map view (⌘M)** — any document's topic tree as an interactive markmap; export as SVG, Mermaid mindmap, or Markdown outline
-- **Edit mode (⌘E)** — CodeMirror source + live preview for md/text, debounced auto-save
-- **Export** — Markdown (from any format via Turndown/PDF extraction), themed standalone HTML, CSV, print-to-PDF
+- **Table of contents** with scroll-sync highlighting, plus a **mind-map view (⌘M)** — any document's topic tree as an interactive markmap
+
+**Write & annotate**
+- **Rich editor** with a right-hand inspector (Style · Format · Paragraph · Insert · Text) that swaps to a compact toolbar on narrow screens; underline, line-spacing, block types, lists, tables, math and diagram blocks
+- **Edit as Markdown** — convert an open PDF, Word or HTML document into an editable Markdown copy, saved through a Save-As dialog
+- **Highlights & margin notes** anchored by character offset, listed in a Notes sidebar and stored alongside the file
+- **Source/rich toggle** for md/text, debounced auto-save
+
+**AI, canvas & present** *(AI is bring-your-own-key: Claude, OpenAI, Gemini, or local Ollama)*
+- **Vedrix AI** — summarize, chat with, and translate the open document; rewrite selected text (grammar, tone, length)
+- **AI → Canvas** — turn a document into an editable Excalidraw board; freeform canvas as a first-class document kind with cross-linked doc cards
+- **Present as slides (⌘⇧P)** — render a Markdown document as a themed 16:9 deck
+
+**Organize & export**
+- **Vault-wide search** — a native folder search surfaced in the command palette (⌘K), with snippets that jump to the match
+- **Export** — Markdown (from any format), themed standalone HTML, CSV, and print-to-PDF with typography, layout, margin and header/footer controls
 - **Themes** — System, GitHub Light/Dark, Dracula, Nord, Monokai, One Dark, Solarized Light/Dark, Sepia
-- **Settings (⌘,)** — content width, font family (system/serif/mono), font size, profile name, session restore
-- **History** of opened files (clock icon), plus recents on the empty screen
-- **Table of contents sidebar** with scroll-sync highlighting (toggle with the ☰ button)
-- **Auto-hiding overlay scrollbars** — visible only while scrolling
-- **Live reload** — edit the file in any editor and the view updates within a second
-- **Relative images** resolve against the opened file's directory
-- **Sanitized rendering** — raw HTML passes through DOMPurify, scripts are stripped
-- Open files via double-click (file association), drag-and-drop, ⌘O, or `Open…`
+- **Settings (⌘,)** — content width, font family, font size, line spacing, profile name, session restore
+- **Live reload**, relative-image resolution, and sanitized rendering (raw HTML through DOMPurify, scripts stripped)
 
 ## Building
 
@@ -29,16 +39,16 @@ Requires Node and Rust (`brew install rustup && rustup-init -y`).
 
 ```bash
 npm install
-PATH="/opt/homebrew/opt/rustup/bin:$PATH" npx tauri build
+PATH="/opt/homebrew/opt/rustup/bin:$PATH" npx tauri build --bundles app
 ```
 
 Artifacts land in `src-tauri/target/release/bundle/`:
-- `macos/Sutra.app` — drag into `/Applications`
-- `dmg/Markdown Viewer_0.1.0_aarch64.dmg` — installer image
+- `macos/Vedrix.app` — drag into `/Applications`
+- `dmg/Vedrix_0.9.1_aarch64.dmg` — installer image (run `npx tauri build` without `--bundles app` for the DMG)
 
-First launch of the unsigned app: right-click → Open (Gatekeeper).
+First launch of the unsigned app: right-click → Open (Gatekeeper). To make it the default app for `.md` files: right-click any `.md` file → Get Info → Open with: Vedrix → Change All…
 
-To make it the default app for `.md` files: right-click any `.md` file → Get Info → Open with: Markdown Viewer → Change All…
+Cross-platform notes — Windows/Linux installers and Android (`.apk`/`.aab`) — are in [docs/BUILDING.md](docs/BUILDING.md). Pushing a `v*` tag builds signed installers for every desktop platform via [.github/workflows/release.yml](.github/workflows/release.yml).
 
 ## Development
 
@@ -53,11 +63,10 @@ python3 -m http.server 8721 --directory src
 
 ## Architecture notes
 
-- `src/index.html` — the whole frontend: rendering, TOC, drag-drop, live-reload polling. Detects Tauri via `window.__TAURI__` and falls back to browser APIs otherwise.
-- `src-tauri/src/lib.rs` — three commands (`read_md_file`, `stat_md_file`, `take_pending_file`) plus macOS `RunEvent::Opened` handling for Finder-initiated opens (Apple events, not argv). A pending-file slot bridges the race between the OS delivering the path and the webview finishing its load.
-- File association is declared in `tauri.conf.json` under `bundle.fileAssociations`.
+- **Frontend** — [src/index.html](src/index.html) (markup), [src/app.js](src/app.js) (~5.6k lines: rendering, tabs, editor, AI, canvas, search, annotations), [src/app.css](src/app.css) + [src/themes.css](src/themes.css). Detects Tauri via `window.__TAURI__` and falls back to browser APIs otherwise. Third-party libraries are prebuilt and loaded from [src/vendor](src/vendor) — no bundler.
+- **Backend** — [src-tauri/src/lib.rs](src-tauri/src/lib.rs) exposes commands for file I/O (`read_md_file`, `stat_md_file`, `read_file_bytes`, `write_file`, `write_bytes`), the library sidecar (`read_library`, `write_library`), folder listing/search (`list_dir_tree`, `search_folder`), and export/print (`save_export`, `print_page`). macOS `RunEvent::Opened` handling bridges Finder-initiated opens (Apple events, not argv) via a pending-file slot.
+- File association is declared in `tauri.conf.json` under `bundle.fileAssociations`. The bundle identifier stays `com.adithya.sutra` so existing library/settings data survives the rename.
 
-## Roadmap (from the ideation plan)
+## Status
 
-- v0.2: in-document search, print/PDF export, relative `.md` links opening in-app
-- v0.3: folder/wiki mode with a file tree, Mermaid, KaTeX, custom themes
+`v0.9.1` — first release under the Vedrix name and logo. See the [releases page](https://github.com/Adithyahavaldar/Vedrix/releases) for installers.
