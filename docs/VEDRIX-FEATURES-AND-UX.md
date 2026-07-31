@@ -1,10 +1,10 @@
-# Sutra — Features & Functionality (for Design)
+# Vedrix — Features & Functionality (for Design)
 
 _Living document for the design team. Describes what exists today, how it behaves, and where the UX/UI needs design work. Version as of 2026-07-04._
 
 * * *
 
-## 1\. What Sutra is
+## 1\. What Vedrix is
 
 **A local-first, instant document workspace.** Open Markdown, PDF, Word, PowerPoint, Excel, HTML, or plain text — read it beautifully, edit it like a document, visualize it, and never touch a cloud. One fast window; no accounts; works offline.
 
@@ -12,7 +12,7 @@ _Living document for the design team. Describes what exists today, how it behave
 
 **Platforms (one codebase):** macOS ✅, Android ✅, Windows/Linux ✅ (installers). iOS planned. The UI must work identically on desktop (mouse/keyboard, ≥720px) and mobile (touch, ≤720px).
 
-**Tech reality designers should know:** Sutra is a native shell (Tauri) around a web UI. Rendering and editing happen in a webview. There is **no design-system framework** — it’s hand-built CSS with a themeable variable layer (see §12). Documents are stored as **Markdown files on disk** (this constrains what editing can persist — see §7).
+**Tech reality designers should know:** Vedrix is a native shell (Tauri) around a web UI. Rendering and editing happen in a webview. There is **no design-system framework** — it’s hand-built CSS with a themeable variable layer (see §12). Documents are stored as **Markdown files on disk** (this constrains what editing can persist — see §7).
 
 * * *
 
@@ -94,7 +94,7 @@ _Living document for the design team. Describes what exists today, how it behave
 
 ## 7\. Editing (Notion-grade, markdown-first)
 
-Sutra has a full editor reachable with **⌘E**. Two surfaces, toggled by a floating **Text / Source / Done** pill:
+Vedrix has a full editor reachable with **⌘E**. Two surfaces, toggled by a floating **Text / Source / Done** pill:
 
 -   **Text (WYSIWYG-style)** — the _rendered_ document becomes directly editable. You type into the beautiful view, not raw syntax. This is the default.
 -   **Source** — a raw-markdown code editor (CodeMirror) for precise syntax work.
@@ -202,7 +202,7 @@ This is greenfield for design. Proposed scope for the design team to shape:
 
 ## 13\. Mobile UX (built, needs polish)
 
-At ≤720px Sutra switches to a mobile layout:
+At ≤720px Vedrix switches to a mobile layout:
 
 -   Topbar collapses to `☰ · tabs · + · ✦ · ⋯`; the rest moves into a **⋯ overflow menu**.
 -   Sidebar becomes a **slide-in drawer** with backdrop.
@@ -247,7 +247,7 @@ At ≤720px Sutra switches to a mobile layout:
 ## 17\. Open product questions (design + product to resolve)
 
 -   Projects vs. tags: one model or both? Primary org unit?
--   Does Sutra get a persistent “home/dashboard,” or stay document-first?
+-   Does Vedrix get a persistent “home/dashboard,” or stay document-first?
 -   How far does editing go for non-Markdown formats (edit DOCX? never)?
 -   Per-selection color/fonts: keep markdown-pure, or offer a richer opt-in mode?
 -   Presentation mode scope for PPTX (and Markdown slides?).

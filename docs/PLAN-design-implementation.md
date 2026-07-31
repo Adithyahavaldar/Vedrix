@@ -1,7 +1,7 @@
 # Plan — Implementing the Design Handoff
 
 *Drafted 2026-07-05. Source: `Modern markdown editor app.zip` →
-`design_handoff_sutra/` (README spec + `Sutra Prototype.dc.html` interactive +
+`design_handoff_sutra/` (README spec + `Vedrix Prototype.dc.html` interactive +
 `Aurora Editor.dc.html` comps). Status: awaiting go / decisions.*
 
 ---
@@ -11,7 +11,7 @@
 A **high-fidelity redesign of the entire app** plus several **net-new
 surfaces**, delivered as HTML design references (not production code). The
 README is a near-complete spec: exact tokens, fonts, icon paths, spacing,
-motion, and per-screen behavior. It explicitly says: **recreate inside Sutra's
+motion, and per-screen behavior. It explicitly says: **recreate inside Vedrix's
 existing CSS-variable environment — no new framework, map hexes to theme
 variables.** This is a **re-skin + additions of the working app**, not a rewrite.
 All current functionality is preserved.
@@ -50,12 +50,12 @@ All current functionality is preserved.
 
 ## 3. Decisions needed before/within build
 
-1. **Collaborator avatars (MK/JD/+3 in the topbar).** Sutra is local-first,
+1. **Collaborator avatars (MK/JD/+3 in the topbar).** Vedrix is local-first,
    single-user; there is **no collaboration backend**. Options: (a) omit them
    (most honest), (b) render as a static "Share" affordance stub for visual
    parity. **Recommendation: omit for now**, revisit if real sharing is ever a
    product goal. *Need your call.*
-2. **Home dashboard changes the app's entry model.** Today Sutra opens straight
+2. **Home dashboard changes the app's entry model.** Today Vedrix opens straight
    into a document/empty state. The design adds a Home with a nav rail. Confirm
    we want Home as a first-class screen (recommended — it's where Projects
    live) vs. keeping document-first with Projects only in the sidebar.

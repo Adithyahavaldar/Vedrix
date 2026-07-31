@@ -1,4 +1,4 @@
-# PRD — Markdown Viewer (working title)
+# PRD — Vedrix
 
 **Version:** 1.0 · **Date:** 2026-07-03 · **Owner:** Adithya · **Status:** Draft for review
 **Current shipped version:** v0.4 (macOS, unsigned, personal use)
@@ -248,7 +248,7 @@ Feature checklist passes on all target platforms → no P0 bugs open → README/
 
 ## 13. Open questions
 
-1. **Product name + brand** — "Markdown Viewer" undersells a multi-format reader; blocks store listings, domain, icon. *(Owner: Adithya; blocking M1.)*
+1. **Product name + brand** — resolved: named **Vedrix** with a geometric "V" mark (the earlier "Markdown Viewer" working title undersold a multi-format reader). *(Owner: Adithya.)*
 2. **AI key model at launch** — BYO-key only (simple, private) vs. bundled proxy (better UX, needs server + cost controls)? *(Owner: Adithya; blocks R21 design, not earlier milestones.)*
 3. **Pro pricing final** — $19/$25/$29 desktop; regional pricing for India? *(Owner: Adithya; blocking M5.)*
 4. **Opt-in telemetry** — ship a count-only anonymous ping, or zero-telemetry as a marketing stance? *(Blocking landing-page copy, not code.)*

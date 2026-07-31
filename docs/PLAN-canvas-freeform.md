@@ -1,6 +1,6 @@
 # Plan — Freeform Canvas (Miro/Excalidraw-style)
 
-**Decision (2026-07-10):** Hybrid — embed **Excalidraw** (MIT) for the full toolset now, theme it to Sutra, and layer Sutra-native integration on top over phases.
+**Decision (2026-07-10):** Hybrid — embed **Excalidraw** (MIT) for the full toolset now, theme it to Vedrix, and layer Vedrix-native integration on top over phases.
 
 ## Why Excalidraw
 - **MIT licensed** — free for commercial/offline/self-host, no watermark, no license key. (tldraw disqualified: React-only + production license key + "made with tldraw" watermark unless paid.)
@@ -9,7 +9,7 @@
 - Fully offline-capable (fonts self-hosted via `window.EXCALIDRAW_ASSET_PATH`).
 
 ## The one constraint we design around
-Sutra's frontend has **no bundler** — libs are prebuilt files in `src/vendor/` loaded via `<script>`. Excalidraw is now ESM + React. So React lives **only inside the canvas view**, isolated behind a vanilla bridge, and is introduced via a **build-time-once** step (not the app runtime):
+Vedrix's frontend has **no bundler** — libs are prebuilt files in `src/vendor/` loaded via `<script>`. Excalidraw is now ESM + React. So React lives **only inside the canvas view**, isolated behind a vanilla bridge, and is introduced via a **build-time-once** step (not the app runtime):
 
 ### Vendor build step — `tools/build-canvas.mjs`
 Run once (and on Excalidraw upgrades), NOT part of `tauri build`:
@@ -34,8 +34,8 @@ app.js never imports React; it calls these.
 
 ## View & chrome
 - New full-screen pane **`#canvasview`** (sibling of `#scroller`/`#mapview`/`#graphview`), toggled by `showPane` (362) / `renderActive` (990). React root mounts once into it; scene swaps per active canvas tab.
-- Topbar/context-bar stay Sutra; the toolbar inside is Excalidraw's (themed).
-- **Theme sync**: pass Excalidraw's `theme` prop from Sutra's light/dark; override its CSS custom properties for accent/surCSS to move toward the Sutra palette (honest limit: it will still read as Excalidraw, not pixel-match Sutra).
+- Topbar/context-bar stay Vedrix; the toolbar inside is Excalidraw's (themed).
+- **Theme sync**: pass Excalidraw's `theme` prop from Vedrix's light/dark; override its CSS custom properties for accent/surCSS to move toward the Vedrix palette (honest limit: it will still read as Excalidraw, not pixel-match Vedrix).
 
 ## Entry points (every function needs a control — audit lesson)
 - Nav rail: **"New canvas"** item (or fold into a New menu).
@@ -49,7 +49,7 @@ app.js never imports React; it calls these.
 ## Phasing (each independently shippable + verified in the real app)
 - **Phase A — Standalone canvas works.** Vendor build; `#canvasview` + bridge; create/draw/save/reopen/export a `.excalidraw`; light/dark theme sync. *Verify: draw → save → reopen → PNG export, on macOS.*
   - **DONE & VERIFIED (2026-07-13, v142):** vendor build (`tools/build-canvas.mjs` → `vendor/excalidraw.bundle.{js,css}` 8.4 MB + 560 KB fonts; React 19.2 + Excalidraw 0.18.1 → IIFE). Bridge `window.SutraCanvas` (mount/load/getScene/setTheme/exportPNG/exportSVG/destroy). Wired: kind `canvas` (`.excalidraw`/`.canvas`), CNV badge, `#canvasview` pane, lazy-load on first open, autosave-to-path + ⌘S Save-As, theme sync, entry points (⌘K "New canvas", Home "＋ New canvas").
-    - **Verified in real WKWebView (macOS):** Excalidraw renders with full toolbar; dark theme auto-synced; canvas tab shows CNV badge + Sutra chrome preserved. (Synthetic mouse-drag doesn't register as a draw stroke — automation limit, not an app bug; click-driven panels all work, so a real pointer draws fine.)
+    - **Verified in real WKWebView (macOS):** Excalidraw renders with full toolbar; dark theme auto-synced; canvas tab shows CNV badge + Vedrix chrome preserved. (Synthetic mouse-drag doesn't register as a draw stroke — automation limit, not an app bug; click-driven panels all work, so a real pointer draws fine.)
     - **Data path verified (browser):** newCanvas→canvas tab+pane→lazy mount→inject element→getScene serialize (529 B)→parseScene round-trip = the exact save/reopen logic. ✓
     - Fonts trimmed 13 MB→560 KB (dropped Xiaolai CJK; build now excludes it).
     - **Remaining for a "complete" Phase A:** confirm a real hand-drawn stroke persists across save→reopen with a human (or non-synthetic) pointer; wire canvas into the **export dialog** (PNG/SVG/.excalidraw) — currently ⌘S saves `.excalidraw` only.
@@ -59,8 +59,8 @@ app.js never imports React; it calls these.
     - **NEW — background patterns:** custom `.sutra-cbg` layer behind Excalidraw (viewBackgroundColor transparent), synced to pan/zoom via onChange. None / Grid / Dots. Renders crisply in real WKWebView. New canvases default to Dots (blankScene appState.sutraBackground). Saved in the file.
     - **NEW — Canva-style colour strip:** `#canvas-controls` bottom-center bar with the None/Grid/Dots segment + 14 swatches + custom-colour picker; `SutraCanvas.setStrokeColor/setFillColor` apply to selection and to the next element.
     - Bridge additions: setBackground/getBackground, setStrokeColor, setFillColor; exports use a solid bg (transparent-on-screen would export blank).
-- **Phase B — Sutra glue.** Canvas kind in Files/Projects/recents/Home with badge; New-canvas entry points; export-dialog wiring; Android WebView smoke test (touch/pen). *Verify: canvas shows in Projects; touch works on device.*
-- **Phase C — Cross-linking (the hybrid payoff, incremental).** A canvas element links to / embeds a Sutra document (open on click); "Send to canvas" from a doc; later: AI-panel awareness of the active canvas.
+- **Phase B — Vedrix glue.** Canvas kind in Files/Projects/recents/Home with badge; New-canvas entry points; export-dialog wiring; Android WebView smoke test (touch/pen). *Verify: canvas shows in Projects; touch works on device.*
+- **Phase C — Cross-linking (the hybrid payoff, incremental).** A canvas element links to / embeds a Vedrix document (open on click); "Send to canvas" from a doc; later: AI-panel awareness of the active canvas.
   - **DONE (2026-07-13, local build, NOT pushed):**
     - **Doc cards:** `SutraCanvas.addDocCard({name, link, color})` — rounded rect + bound label (via `convertToExcalidrawElements`), placed at the viewport centre (staggered), badge-coloured per doc kind, carrying a `sutra://open?path=…` link (label inherits it, so the whole card is clickable).
     - **Click-to-open:** Excalidraw `onLinkOpen` → `window.SutraCanvasOnLink` → switches to the open tab or `openTauriPath`; real http links unaffected.

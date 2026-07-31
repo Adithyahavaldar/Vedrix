@@ -17,7 +17,7 @@ HTML currently renders in a script-stripped sandbox: perfect for _reading_ an HT
 | Scripts | ✅ run | ❌ stripped |
 | Page CSS | ✅ | ✅ |
 | Relative assets (`./app.js`, `./style.css`, images) | ✅ real files load | images only |
-| Sutra TOC / ⌘F / export / mind map | ❌ (isolated) | ✅ |
+| Vedrix TOC / ⌘F / export / mind map | ❌ (isolated) | ✅ |
 | Isolation | full cross-origin | sandboxed, no scripts |
 
 A toggle on the tab (like the PDF “Aa”) switches modes; per-tab choice remembered. Reader is the fallback when a page fails or you just want to read.
@@ -26,15 +26,15 @@ A toggle on the tab (like the PDF “Aa”) switches modes; per-tab choice remem
 
 -   **Desktop/Android:** `iframe.src = convertFileSrc(path)` — the file loads as a real URL over the asset protocol. Consequences, all good:
     -   relative `<script src>`, `<link href>`, images, fonts, even multi-file site folders resolve from disk → **full prototypes work**, not just single files
-    -   the asset origin (`asset://` / `http://asset.localhost`) is **cross-origin from the app**, so page JS cannot touch Sutra’s DOM, settings, or Tauri IPC — isolation comes from the browser’s own origin model, not from us sanitizing anything
--   The frame fills the pane and owns its scrolling (dashboards manage their own layout); Sutra’s scroll-thumb and reader width are disabled for this mode.
+    -   the asset origin (`asset://` / `http://asset.localhost`) is **cross-origin from the app**, so page JS cannot touch Vedrix’s DOM, settings, or Tauri IPC — isolation comes from the browser’s own origin model, not from us sanitizing anything
+-   The frame fills the pane and owns its scrolling (dashboards manage their own layout); Vedrix’s scroll-thumb and reader width are disabled for this mode.
 -   `fetch()`/XHR from the page to external APIs works (dashboards often need live data). Local-first purists can stay in Reader mode.
 -   **Browser dev mode:** `srcdoc` + `sandbox="allow-scripts"` (opaque origin — never combined with `allow-same-origin`); relative assets unavailable there./
 
 ## Security model (explicit)
 
--   Interactive pages run JS **in an isolated origin**: no access to Sutra’s window, localStorage, or IPC. Verify during implementation that `__TAURI__` is not injected into cross-origin frames (test + assert in a diag).
--   `target=_blank` / external links from the frame → open in the system browser, never inside Sutra.
+-   Interactive pages run JS **in an isolated origin**: no access to Vedrix’s window, localStorage, or IPC. Verify during implementation that `__TAURI__` is not injected into cross-origin frames (test + assert in a diag).
+-   `target=_blank` / external links from the frame → open in the system browser, never inside Vedrix.
 -   Never `allow-same-origin` + `allow-scripts` together on srcdoc (that combo would let the page reach the parent).
 
 ## Work items (≈ half a day)
@@ -52,13 +52,13 @@ A toggle on the tab (like the PDF “Aa”) switches modes; per-tab choice remem
 
 ## The core constraint to decide up front
 
-Sutra stores documents as **markdown**. Markdown can express: headings, bold/italic/strike, inline & block code, links, images, lists, task lists, tables, quotes, dividers, math, mermaid. Markdown **cannot** express: per-character fonts/sizes/colors, alignment, columns, callout backgrounds.
+Vedrix stores documents as **markdown**. Markdown can express: headings, bold/italic/strike, inline & block code, links, images, lists, task lists, tables, quotes, dividers, math, mermaid. Markdown **cannot** express: per-character fonts/sizes/colors, alignment, columns, callout backgrounds.
 
 **Decision (recommended):** stay markdown-first.
 
 -   Everything markdown-expressible gets first-class editing UI.
 -   _Document-level_ appearance (font family, size, width) stays in Settings — surfaced compactly in the edit toolbar as an “Aa” popover (this is what the “fonts / size” ask maps to without breaking files).
--   _Per-selection_ color/highlight ships later as **opt-in “rich extras”** persisted as inline HTML spans inside the markdown (valid md; renders everywhere in Sutra; degrades gracefully in other editors). Toggle in Settings, default off.
+-   _Per-selection_ color/highlight ships later as **opt-in “rich extras”** persisted as inline HTML spans inside the markdown (valid md; renders everywhere in Vedrix; degrades gracefully in other editors). Toggle in Settings, default off.
 
 Alternative considered and rejected: adopting a prebuilt editor (Toast UI / TipTap). Rejected because: TipTap/ProseMirror requires a bundler (breaks the no-build architecture), Toast UI imposes its own look (breaks the “reading and editing look identical” identity) and its md dialect fights our pipeline (mermaid/KaTeX/typographer). We keep the contenteditable engine we already shipped and grow a command layer on it.
 

@@ -1,4 +1,4 @@
-# Sutra — UI/UX Audit
+# Vedrix — UI/UX Audit
 
 **Date:** 2026-07-06 · **Method:** hands-on testing (desktop 1280px + mobile 375px, cold start & loaded states) plus a full code-level antipattern scan of `index.html` / `app.js` / `app.css` / `themes.css`.
 
@@ -40,7 +40,7 @@ At 375px the Read/Edit segment overlaps and clips ("Ed…"), and the meta text w
 **Fix:** mobile layout for `#context-bar` — drop the word-count meta, keep path + Read/Edit + Saved; let the segment shrink gracefully.
 
 ### H4. Cold-start (first-run) screen is off-design and passive
-The very first screen a new user sees: 📄 emoji, "Sutra", and "press ⌘O" / "Tap ＋ above" — no button, no drop-zone affordance, none of the design language. It's the weakest surface in the app and it's the first impression.
+The very first screen a new user sees: 📄 emoji, "Vedrix", and "press ⌘O" / "Tap ＋ above" — no button, no drop-zone affordance, none of the design language. It's the weakest surface in the app and it's the first impression.
 **Fix:** first-run version of the designed Home — brand tile, a real **Open a file** button, "or drop a file anywhere" hint, optional "Open sample document".
 
 ### H5. Mobile/desktop mode is frozen at load

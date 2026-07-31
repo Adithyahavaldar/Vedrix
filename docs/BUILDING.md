@@ -1,13 +1,13 @@
-# Building Sutra across platforms
+# Building Vedrix across platforms
 
-Sutra is one Tauri 2 codebase. The web frontend (`src/`) is identical everywhere; only packaging and a few platform shims differ.
+Vedrix is one Tauri 2 codebase. The web frontend (`src/`) is identical everywhere; only packaging and a few platform shims differ.
 
 ## Local macOS build (what we use now)
 
 ```bash
 npm install
 PATH="/opt/homebrew/opt/rustup/bin:$PATH" npx tauri build --bundles app
-ditto "src-tauri/target/release/bundle/macos/Sutra.app" "/Applications/Sutra.app"
+ditto "src-tauri/target/release/bundle/macos/Vedrix.app" "/Applications/Vedrix.app"
 ```
 
 Notes:
@@ -41,7 +41,7 @@ Signing (to avoid SmartScreen warnings): set an OV/EV cert. Azure Trusted Signin
 
 ## Android
 
-**The responsive mobile UI is done** — at ≤720px viewport width Sutra switches to: a slide-in drawer sidebar (hamburger), a collapsed topbar with a `⋯` overflow menu, a full-screen AI sheet, 40px touch targets, and pinch-to-zoom on PDFs/slides. This activates automatically inside the Android webview.
+**The responsive mobile UI is done** — at ≤720px viewport width Vedrix switches to: a slide-in drawer sidebar (hamburger), a collapsed topbar with a `⋯` overflow menu, a full-screen AI sheet, 40px touch targets, and pinch-to-zoom on PDFs/slides. This activates automatically inside the Android webview.
 
 Prerequisites (this Mac currently has **Java 8 and no SDK** — all three needed):
 
@@ -72,7 +72,7 @@ Still to do for a shippable Android app: file intake from the OS share sheet / d
 
 ## Product identity note
 
-App name is **Sutra** (bundle id `com.adithya.sutra`) with a custom icon (golden thread “S” + bindu on indigo). Same identity carries across all platforms.
+App name is **Vedrix** (bundle id `com.adithya.sutra` — kept so existing local data survives the rename) with a custom icon (a geometric "V" mark on Vedrix blue `#2f6bff`). Same identity carries across all platforms.
 
 ## iOS
 

@@ -1,4 +1,4 @@
-# Markdown Viewer — Roadmap & Ideation
+# Vedrix — Roadmap & Ideation
 
 *Drafted 2026-07-03, after v0.4 (tabs, themes, multi-format, topic sidebars).*
 
@@ -131,11 +131,11 @@ identity.
 
 | Phase | Contents | Rough size |
 |---|---|---|
-| **A — Serious reader** ✅ *shipped 2026-07-03 (v0.9)* | ⌘F, PDF selection + zoom, position memory, relative links, Mermaid/KaTeX, app icon ("Sutra" branding), native menus, shortcuts sheet | done |
+| **A — Serious reader** ✅ *shipped 2026-07-03 (v0.9)* | ⌘F, PDF selection + zoom, position memory, relative links, Mermaid/KaTeX, app icon ("Vedrix" branding), native menus, shortcuts sheet | done |
 | **B — Create & convert** ◐ *core shipped 2026-07-03* | ⌘E edit mode ✅ · Export MD/HTML/CSV + print-to-PDF ✅ · PDF→MD reading mode ✅ · remaining: MD→DOCX (R15), pandoc sidecar (R17) | done except R15/R17 |
 | **C — Visualize** ✅ *shipped 2026-07-03* | Mind map view (⌘M, markmap) for every format ✅ · exports SVG / Mermaid mindmap / MD outline ✅ · folder/wiki mode (⌘⇧O) ✅ · knowledge graph of [[wikilinks]] + relative links (⌘G, d3-force) ✅ | done |
 | **D — AI companion** ✅ *shipped 2026-07-03* | Provider-agnostic AI — **any** model (Anthropic, OpenAI, Google, OpenRouter, Groq, DeepSeek, Mistral, Ollama, LM Studio, custom) via preset dropdown + editable base URL / model / key ✅ · calls routed through a Rust proxy (bypasses CORS + macOS ATS so local http endpoints work) ✅ · Summarize ✅ · Chat ✅ · Translate → new tab ✅ · AI concept map ✅ · schema-with-graceful-fallback for JSON ✅ | done |
-| **E — Productize** ◐ *in progress 2026-07-03* | Cross-platform code (open_externally mac/win/linux, temp-dir diag, platform-split window config, mac-gated titlebar, `#[cfg(desktop)]` menu) ✅ · GitHub Actions release matrix ✅ · `docs/BUILDING.md` ✅ · **Responsive mobile UI** (≤720px: drawer sidebar, ⋯ overflow menu, full-screen AI sheet, 40px touch targets, PDF pinch-zoom, mobile-aware empty state + onboarding) ✅ · **Android APK built & verified running on Android 14 emulator** (toolchain: JDK17 + SDK34 + NDK 27.2; `~/Desktop/Sutra-debug.apk`) ✅ · remaining: run Windows build via CI, signing/notarization, auto-updater, Android share-sheet file intake + Play release, iOS (needs Xcode), Pro packaging | in progress |
+| **E — Productize** ◐ *in progress 2026-07-03* | Cross-platform code (open_externally mac/win/linux, temp-dir diag, platform-split window config, mac-gated titlebar, `#[cfg(desktop)]` menu) ✅ · GitHub Actions release matrix ✅ · `docs/BUILDING.md` ✅ · **Responsive mobile UI** (≤720px: drawer sidebar, ⋯ overflow menu, full-screen AI sheet, 40px touch targets, PDF pinch-zoom, mobile-aware empty state + onboarding) ✅ · **Android APK built & verified running on Android 14 emulator** (toolchain: JDK17 + SDK34 + NDK 27.2; `~/Desktop/Vedrix-debug.apk`) ✅ · remaining: run Windows build via CI, signing/notarization, auto-updater, Android share-sheet file intake + Play release, iOS (needs Xcode), Pro packaging | in progress |
 | Continuous | One PPTX fidelity rung + one perf item per phase; library features (search-all, split view, annotations, OCR) slot in where they unblock a phase | — |
 
 Ordering logic: B before C (export/edit infra is what mind-map export reuses);
