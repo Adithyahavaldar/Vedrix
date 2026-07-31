@@ -61,8 +61,8 @@ jobs:
           #   TAURI_SIGNING_PRIVATE_KEY / TAURI_SIGNING_PRIVATE_KEY_PASSWORD
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'Sutra ${{ github.ref_name }}'
-          releaseBody: 'See the assets below to download and install Sutra.'
+          releaseName: 'Vedrix ${{ github.ref_name }}'
+          releaseBody: 'See the assets below to download and install Vedrix.'
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
