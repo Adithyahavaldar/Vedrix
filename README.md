@@ -2,6 +2,8 @@
 
 *(formerly Sutra / Markdown Viewer)*
 
+**[📖 Design & architecture docs](https://adithyahavaldar.github.io/Vedrix/)** · **[⬇ Releases](https://github.com/Adithyahavaldar/Vedrix/releases)**
+
 One quiet home for everything you read, annotate, and write — **Markdown, PDF, Word, PowerPoint, Excel, and plain text** — in a fast, offline, native app. Double-click any supported file in Finder and it opens rendered and readable, with a table-of-contents sidebar, automatic dark mode, and live reload when the file changes on disk.
 
 Built with [Tauri 2](https://tauri.app) (native WebView shell, ~10 MB app) around a dependency-light web core: `markdown-it` + `highlight.js` + `DOMPurify` + GitHub markdown CSS, with PDF.js, mammoth, SheetJS, Turndown, markmap, KaTeX, Mermaid and Excalidraw all vendored locally in [src/vendor](src/vendor) so the app works fully offline. Runs on macOS, Windows and Linux desktops, and on Android.
@@ -69,4 +71,4 @@ python3 -m http.server 8721 --directory src
 
 ## Status
 
-`v0.9.1` — first release under the Vedrix name and logo. See the [releases page](https://github.com/Adithyahavaldar/Vedrix/releases) for installers.
+`v0.9.1` — first release under the Vedrix name and logo. See the [releases page](https://github.com/Adithyahavaldar/Vedrix/releases) for installers, and the browsable **[design & architecture docs](https://adithyahavaldar.github.io/Vedrix/)** (PRD, roadmap, UX audit, and build plans) — served from [docs/](docs/) via GitHub Pages.
