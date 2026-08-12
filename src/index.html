@@ -12,8 +12,8 @@
 <link rel="stylesheet" href="vendor/fonts/fonts.css">
 <link rel="stylesheet" href="vendor/katex.min.css">
 <link rel="stylesheet" href="vendor/codemirror.css">
-<link rel="stylesheet" href="app.css?v=174">
-<link rel="stylesheet" href="themes.css?v=174">
+<link rel="stylesheet" href="app.css?v=175">
+<link rel="stylesheet" href="themes.css?v=175">
 </head>
 <body>
   <div id="topbar" data-tauri-drag-region>
@@ -417,6 +417,8 @@
         <button class="ai-chip" id="ai-translate">Translate</button>
         <button class="ai-chip" id="ai-conceptmap">Concept map</button>
         <button class="ai-chip" id="ai-board">Canvas board</button>
+        <button class="ai-chip" id="ai-vault">Ask vault</button>
+        <button class="ai-chip" id="ai-props">Fill properties</button>
       </div>
       <div id="ai-input-row">
         <textarea id="ai-input" rows="1" placeholder="Ask about this document…"></textarea>
@@ -696,6 +698,6 @@
   window.pdfjsLib = pdfjsLib;
   window.dispatchEvent(new Event('pdfjs-ready'));
 </script>
-<script src="app.js?v=174"></script>
+<script src="app.js?v=175"></script>
 </body>
 </html>

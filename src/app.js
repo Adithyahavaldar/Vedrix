@@ -1397,7 +1397,12 @@ function fmSet(text, key, value) {
     else lines.splice(entry.line, end - entry.line + 1, key + ': ' + fmSerializeValue(value));
   } else {
     if (value == null) return text;
-    lines.splice(lines.length - 1, 0, key + ': ' + fmSerializeValue(value));  // before closing ---
+    // Insert before the CLOSING delimiter. Not lines.length - 1: the block ends
+    // with a newline, so that index is the empty string AFTER the closing ---,
+    // which would write the new key into the body instead of the frontmatter.
+    let close = lines.length - 1;
+    while (close > 0 && !/^(---|\.\.\.)\s*$/.test(lines[close])) close--;
+    lines.splice(close, 0, key + ': ' + fmSerializeValue(value));
   }
   return lines.join(nl) + body;
 }
@@ -3060,12 +3065,14 @@ function cmdActions() {
       id: 'tpl-' + tpl.rel, label: 'New page from template: ' + tpl.title, hint: '', icon: 'doc',
       run: () => { closeCmd(); newFromTemplate(tpl); },
     }));
+    list.push({ id: 'ask-vault', label: 'Ask your vault (AI)', hint: 'AI', icon: 'ai', filled: true, run: () => { closeCmd(); openVaultAsk(); } });
     list.push({ id: 'history', label: 'Version history…', hint: '', icon: 'clock', run: () => { closeCmd(); openHistory(); } });
     list.push({ id: 'publish', label: 'Publish this folder as a site…', hint: '', icon: 'doc', run: () => { closeCmd(); publishSite(folder.root); } });
     list.push({ id: 'open-db', label: 'Open this folder as a database', hint: '', icon: 'doc', run: () => { closeCmd(); createDatabaseHere(folder.root); } });
     list.push({ id: 'new-db', label: 'New database here', hint: '', icon: 'doc', run: () => { closeCmd(); createDatabaseHere(folder.root); } });
   }
   if (t && t.kind === 'md') {
+    list.push({ id: 'ai-props', label: 'Fill page properties (AI)', hint: 'AI', icon: 'ai', filled: true, run: () => { closeCmd(); aiFillProperties(); } });
     list.push({ id: 'add-prop', label: 'Add a page property', hint: '', icon: 'doc', run: () => { closeCmd(); setTimeout(() => addProp(activeTab()), 30); } });
     list.push({ id: 'show-links', label: 'Show links & backlinks', hint: '', icon: 'find', run: () => { closeCmd(); sideMode = 'links'; sidebarCollapsed = false; updateSidebar(); } });
   }
@@ -5469,10 +5476,20 @@ function wireAi() {
   $('ai-translate').addEventListener('click', aiTranslate);
   $('ai-conceptmap').addEventListener('click', aiConceptMap);
   $('ai-board').addEventListener('click', aiToCanvas);
+  $('ai-vault').addEventListener('click', openVaultAsk);
+  $('ai-props').addEventListener('click', aiFillProperties);
   const send = () => {
-    const v = $('ai-input').value.trim();
+    const input = $('ai-input');
+    const v = input.value.trim();
     if (!v) return;
-    $('ai-input').value = '';
+    input.value = '';
+    // vault mode (⌘K → "Ask your vault") asks across every page, not just this one
+    if (input.dataset.vault === '1') {
+      input.dataset.vault = '';
+      input.placeholder = 'Ask about this document…';
+      vaultAsk(v);
+      return;
+    }
     aiAsk(v);
   };
   $('ai-send').addEventListener('click', send);
@@ -6615,6 +6632,13 @@ function renderDbBar() {
     chip.appendChild(x);
     bar.appendChild(chip);
   });
+  const aiv = document.createElement('button');
+  aiv.className = 'db-addfilter db-aiv';
+  aiv.textContent = '✦ AI view';
+  aiv.title = 'Describe a view in a sentence';
+  aiv.addEventListener('click', askForView);
+  bar.appendChild(aiv);
+
   const addF = document.createElement('button');
   addF.className = 'db-addfilter';
   addF.textContent = '+ Filter';
@@ -8752,4 +8776,369 @@ function wireComments() {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && histState.open) { e.preventDefault(); closeHistory(); }
   });
+}
+
+/* ==========================================================================
+   N8 — Workspace AI
+
+   Three things the AI can do across the whole vault rather than one document:
+   ask a question of every page, fill a page's properties, and build a database
+   view from a sentence.
+
+   The rule everywhere here: NEVER apply a model's output to the user's files
+   without validating it first. A hallucinated property name or filter operator
+   must be reported, not written into a schema. Retrieval cites real pages so
+   an answer can be checked against the source.
+   ========================================================================== */
+
+const VAULT_STOPWORDS = new Set(('a an and are as at be but by for from how i in is it its of on or that the this to was what when where which who why with your you my me do does did can could should would will your'
+  ).split(' '));
+
+const vaultTerms = (q) => [...new Set(String(q || '').toLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N}'-]{1,}/gu) || [])]
+  .filter(w => w.length > 2 && !VAULT_STOPWORDS.has(w));
+
+/* ---------- retrieval ------------------------------------------------------ */
+
+// Rank vault pages against the question: title matches count for a lot (a page
+// literally named after the topic is usually the answer), body hits for the
+// rest. Native search does the scanning so this stays fast on a big vault.
+async function vaultRetrieve(question, limit = 6) {
+  if (pageIndex.dirty) buildPageIndex();
+  const terms = vaultTerms(question);
+  const scores = new Map();   // path -> { page, score }
+  const bump = (page, n) => {
+    if (!page) return;
+    const cur = scores.get(page.path) || { page, score: 0 };
+    cur.score += n;
+    scores.set(page.path, cur);
+  };
+
+  pageIndex.pages.forEach(p => {
+    const title = p.title.toLowerCase();
+    terms.forEach(term => {
+      if (title === term) bump(p, 12);
+      else if (title.includes(term)) bump(p, 6);
+    });
+  });
+
+  if (TAURI && folder) {
+    const byPath = new Map(pageIndex.pages.map(p => [p.path, p]));
+    // a few of the most distinctive terms is plenty — this is retrieval, not search
+    for (const term of terms.slice(0, 4)) {
+      try {
+        const hits = await TAURI.core.invoke('search_folder', { root: folder.root, query: term });
+        (hits || []).forEach(h => bump(byPath.get(h.path) || { path: h.path, title: h.name.replace(/\.(md|markdown)$/i, ''), rel: h.name }, Math.min(4, 1 + Math.log2(h.count || 1))));
+      } catch (_) { /* search is best-effort */ }
+    }
+  }
+
+  return [...scores.values()].sort((a, b) => b.score - a.score).slice(0, limit).map(s => s.page);
+}
+
+async function vaultAsk(question) {
+  if (aiBusy) return;
+  if (!folder) { toast('Open a folder (⌘⇧O) to ask across your vault'); return; }
+  toggleAiPanel(true);
+  aiBusy = true;
+  aiMsgEl('user', question);
+  const busy = aiMsgEl('info', 'searching your vault'); busy.classList.add('busy');
+  try {
+    const pages = await vaultRetrieve(question);
+    if (!pages.length) {
+      busy.remove();
+      aiMsgEl('info', 'Nothing in this folder looks related to that.');
+      return;
+    }
+    busy.textContent = 'reading ' + pages.length + ' page' + (pages.length === 1 ? '' : 's');
+    const parts = [];
+    for (const p of pages) {
+      let text = '';
+      try { text = TAURI ? (await TAURI.core.invoke('read_md_file', { path: p.path })).text
+                         : ((window.__dbMock && window.__dbMock.files[p.path]) || ''); } catch (_) {}
+      if (!text) continue;
+      parts.push('<page name="' + p.title + '">\n' + splitFm(text).body.slice(0, 12000) + '\n</page>');
+    }
+    const answer = await callAI({
+      system: 'You answer questions using ONLY the vault pages provided. '
+        + 'Cite every claim with the page it came from, written as [[Page name]] — the reader can click those. '
+        + 'If the pages do not contain the answer, say so plainly instead of guessing. Be concise.',
+      messages: [{ role: 'user', content: parts.join('\n\n') + '\n\nQuestion: ' + question }],
+    });
+    busy.remove();
+    const el = aiMsgEl('assistant', answer);
+    decorateAiCitations(el);
+    const src = document.createElement('div');
+    src.className = 'ai-sources';
+    src.textContent = 'Searched: ' + pages.map(p => p.title).join(' · ');
+    el.appendChild(src);
+  } catch (err) {
+    busy.remove();
+    aiErrorEl(err);
+  } finally { aiBusy = false; }
+}
+
+// [[Page]] citations in an answer become real links into the vault.
+function decorateAiCitations(scope) {
+  scope.querySelectorAll('a.wikilink[data-wiki]').forEach(a => {
+    const target = a.getAttribute('data-wiki');
+    const hit = resolveWiki(target);
+    a.classList.toggle('missing', !hit);
+    a.addEventListener('click', (e) => { e.preventDefault(); openWikiLink(target); });
+  });
+}
+
+/* ---------- AI fills page properties --------------------------------------- */
+
+const PROPS_SCHEMA = {
+  type: 'object', additionalProperties: false, required: ['values'],
+  properties: {
+    values: {
+      type: 'array',
+      items: {
+        type: 'object', additionalProperties: false, required: ['prop', 'value'],
+        properties: { prop: { type: 'string' }, value: { type: 'string' }, why: { type: 'string' } },
+      },
+    },
+  },
+};
+
+// Describe the schema the model must fill, skipping anything computed — a
+// formula has no stored field to write to.
+function propSpecFor(schema) {
+  const props = schema && schema.properties ? schema.properties : {};
+  return Object.keys(props)
+    .filter(k => !['formula', 'rollup'].includes((props[k] || {}).type))
+    .map(k => {
+      const p = props[k] || {};
+      const opts = Array.isArray(p.options) && p.options.length ? ' one of: ' + p.options.join(' | ') : '';
+      return '- ' + k + ' (' + (p.type || 'text') + ')' + opts;
+    });
+}
+
+async function aiFillProperties() {
+  const t = activeTab();
+  if (!t || aiBusy) return;
+  if (t.kind !== 'md') { toast('Open a Markdown page first'); return; }
+  // the schema comes from the page's database when it is in one
+  let schema = db && t.path && t.path.startsWith(db.folder) ? db.schema : null;
+  if (!schema) {
+    const dir = t.path ? t.path.slice(0, t.path.lastIndexOf('/')) : '';
+    if (dir) { try { const loaded = await dbLoad(dir); schema = loaded.schema; } catch (_) {} }
+  }
+  const spec = schema ? propSpecFor(schema) : [];
+  if (!spec.length) { toast('No database properties to fill — this page is not in a database'); return; }
+
+  toggleAiPanel(true);
+  aiBusy = true;
+  const busy = aiMsgEl('info', 'reading the page'); busy.classList.add('busy');
+  try {
+    const body = splitFm(t.text || '').body.slice(0, 20000);
+    const raw = await callAI({
+      system: 'You fill in database properties for a note by reading it. Only use values the note supports; '
+        + 'when a property has a fixed list of options you MUST choose from that list. '
+        + 'Leave out any property you cannot determine — a wrong value is worse than a blank one. '
+        + 'Respond as JSON: {"values":[{"prop":"…","value":"…","why":"…"}]}',
+      messages: [{ role: 'user', content: 'Properties:\n' + spec.join('\n') + '\n\n<note name="' + t.name + '">\n' + body + '\n</note>' }],
+      schema: PROPS_SCHEMA,
+    });
+    const parsed = parseJsonLoose(raw);
+    const proposed = Array.isArray(parsed.values) ? parsed.values : [];
+
+    // ---- validate before showing anything: the model does not get to invent
+    // property names, and a select value must be one of the declared options.
+    const known = schema.properties || {};
+    const ok = [], rejected = [];
+    proposed.forEach(v => {
+      const p = Object.prototype.hasOwnProperty.call(known, v.prop) ? known[v.prop] : null;
+      if (!p) { rejected.push(v.prop + ' (no such property)'); return; }
+      if (['formula', 'rollup'].includes(p.type)) { rejected.push(v.prop + ' (computed)'); return; }
+      const val = String(v.value == null ? '' : v.value).trim();
+      if (!val) return;
+      if (p.type === 'select' && Array.isArray(p.options) && p.options.length
+          && !p.options.some(o => String(o).toLowerCase() === val.toLowerCase())) {
+        rejected.push(v.prop + ' = “' + val + '” (not an option)');
+        return;
+      }
+      if (p.type === 'date' && !/^\d{4}-\d{2}-\d{2}/.test(val)) { rejected.push(v.prop + ' (not a date)'); return; }
+      if (p.type === 'number' && isNaN(Number(val))) { rejected.push(v.prop + ' (not a number)'); return; }
+      ok.push({ prop: v.prop, value: val, why: v.why || '' });
+    });
+
+    busy.remove();
+    if (!ok.length) {
+      aiMsgEl('info', 'Nothing could be filled in confidently' + (rejected.length ? ' (skipped: ' + rejected.join(', ') + ')' : '') + '.');
+      return;
+    }
+    renderPropProposal(t, ok, rejected);
+  } catch (err) {
+    busy.remove();
+    aiErrorEl(err);
+  } finally { aiBusy = false; }
+}
+
+// Nothing is written until this is accepted — the user sees exactly what changes.
+function renderPropProposal(t, values, rejected) {
+  const host = document.createElement('div');
+  host.className = 'ai-msg assistant ai-proposal';
+  const label = document.createElement('div');
+  label.className = 'ai-label';
+  label.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 2l1.9 6.1L20 10l-6.1 1.9L12 18l-1.9-6.1L4 10l6.1-1.9z"/></svg> Suggested properties';
+  host.appendChild(label);
+  const list = document.createElement('div');
+  list.className = 'prop-proposal';
+  const chosen = new Map(values.map(v => [v.prop, v]));
+  values.forEach(v => {
+    const row = document.createElement('label');
+    row.className = 'prop-prop-row';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.checked = true;
+    cb.addEventListener('change', () => { if (cb.checked) chosen.set(v.prop, v); else chosen.delete(v.prop); });
+    row.appendChild(cb);
+    const k = document.createElement('b'); k.textContent = v.prop;
+    const val = document.createElement('span'); val.className = 'pp-val'; val.textContent = v.value;
+    row.append(k, val);
+    if (v.why) { const why = document.createElement('i'); why.textContent = v.why; row.appendChild(why); }
+    list.appendChild(row);
+  });
+  host.appendChild(list);
+  if (rejected.length) {
+    const skip = document.createElement('div');
+    skip.className = 'ai-sources';
+    skip.textContent = 'Skipped: ' + rejected.join(', ');
+    host.appendChild(skip);
+  }
+  const actions = document.createElement('div');
+  actions.className = 'ai-actions';
+  const apply = document.createElement('button');
+  apply.textContent = 'Apply to this page';
+  apply.addEventListener('click', async () => {
+    let n = 0;
+    for (const v of chosen.values()) { t.text = fmSet(t.text, v.prop, v.value); n++; }
+    t.fm = splitFm(t.text).fm;
+    t.html = await buildHtml(t.kind, { text: t.text });
+    if (activeTab() === t) renderActive();
+    setDirty(t, true); saveEditor(t);
+    apply.disabled = true; apply.textContent = 'Applied ' + n + ' propert' + (n === 1 ? 'y' : 'ies');
+  });
+  actions.appendChild(apply);
+  host.appendChild(actions);
+  $('ai-messages').appendChild(host);
+  $('ai-messages').scrollTop = $('ai-messages').scrollHeight;
+}
+
+/* ---------- AI builds a database view -------------------------------------- */
+
+const VIEW_SCHEMA = {
+  type: 'object', additionalProperties: false, required: ['name', 'type'],
+  properties: {
+    name: { type: 'string' },
+    type: { type: 'string' },
+    group: { type: 'string' },
+    date: { type: 'string' },
+    sort: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['prop'], properties: { prop: { type: 'string' }, dir: { type: 'string' } } } },
+    filter: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['prop', 'op'], properties: { prop: { type: 'string' }, op: { type: 'string' }, value: { type: 'string' } } } },
+  },
+};
+
+const VIEW_OPS = ['contains', 'is', 'is not', 'is empty', 'is not empty', '>', '<'];
+
+// Validate a model-proposed view against the real schema. Anything referring to
+// a property that doesn't exist is dropped and reported — never silently saved.
+function sanitizeView(v, schema) {
+  const props = Object.keys(schema.properties || {});
+  const has = (k) => props.some(p => p.toLowerCase() === String(k || '').toLowerCase());
+  const real = (k) => props.find(p => p.toLowerCase() === String(k || '').toLowerCase());
+  const problems = [];
+  const out = { name: String(v.name || 'AI view').slice(0, 40), type: ['table', 'board', 'calendar', 'gallery'].includes(v.type) ? v.type : 'table' };
+  if (v.type && out.type !== v.type) problems.push('unknown view type “' + v.type + '”');
+
+  if (out.type === 'board') {
+    if (has(v.group)) out.group = real(v.group);
+    else { out.group = props[0]; if (v.group) problems.push('no property “' + v.group + '” to group by'); }
+  }
+  if (out.type === 'calendar') {
+    if (has(v.date)) out.date = real(v.date);
+    else {
+      out.date = props.find(p => (schema.properties[p] || {}).type === 'date') || props[0];
+      if (v.date) problems.push('no date property “' + v.date + '”');
+    }
+  }
+  const sort = (v.sort || []).filter(s => {
+    if (!has(s.prop)) { problems.push('cannot sort by “' + s.prop + '”'); return false; }
+    return true;
+  }).map(s => ({ prop: real(s.prop), dir: String(s.dir || 'asc').toLowerCase().startsWith('desc') ? 'desc' : 'asc' }));
+  if (sort.length) out.sort = sort;
+
+  const filter = (v.filter || []).filter(f => {
+    if (!has(f.prop)) { problems.push('cannot filter by “' + f.prop + '”'); return false; }
+    if (!VIEW_OPS.includes(f.op)) { problems.push('unknown filter “' + f.op + '”'); return false; }
+    return true;
+  }).map(f => ({ prop: real(f.prop), op: f.op, value: f.value == null ? '' : String(f.value) }));
+  if (filter.length) out.filter = filter;
+
+  return { view: out, problems };
+}
+
+async function aiMakeView(sentence) {
+  if (!db) { toast('Open a database first'); return; }
+  if (aiBusy) return;
+  const schema = db.schema;
+  aiBusy = true;
+  toast('Building a view…');
+  try {
+    const spec = Object.keys(schema.properties || {}).map(k => {
+      const p = schema.properties[k] || {};
+      const opts = Array.isArray(p.options) && p.options.length ? ' options: ' + p.options.join(' | ') : '';
+      return '- ' + k + ' (' + (p.type || 'text') + ')' + opts;
+    });
+    const raw = await callAI({
+      system: 'You design a database view from a request. Use ONLY the listed properties — never invent one. '
+        + 'type is one of table | board | calendar | gallery. board needs "group"; calendar needs "date". '
+        + 'filter ops are exactly: ' + VIEW_OPS.map(o => '"' + o + '"').join(', ') + '. '
+        + 'Dates are YYYY-MM-DD. Give the view a short name. '
+        + 'Respond as JSON: {"name":"…","type":"…","group":"…","date":"…","sort":[{"prop":"…","dir":"asc"}],"filter":[{"prop":"…","op":"…","value":"…"}]}',
+      messages: [{ role: 'user', content: 'Properties:\n' + spec.join('\n') + '\n\nToday is ' + new Date().toISOString().slice(0, 10) + '.\nRequest: ' + sentence }],
+      schema: VIEW_SCHEMA,
+    });
+    const { view, problems } = sanitizeView(parseJsonLoose(raw), schema);
+    db.schema.views.push(view);
+    db.viewIdx = db.schema.views.length - 1;
+    await dbSaveSchema();
+    renderDbAll();
+    toast(problems.length ? 'Added “' + view.name + '” (adjusted: ' + problems[0] + ')' : 'Added “' + view.name + '”');
+  } catch (err) {
+    console.error(err);
+    toast(err && err.message ? err.message : 'Could not build that view');
+  } finally { aiBusy = false; }
+}
+
+function askForView() {
+  const bar = $('db-bar');
+  if (!bar || bar.querySelector('.db-aiview')) return;
+  const wrap = document.createElement('span');
+  wrap.className = 'db-chip db-aiview editing';
+  const input = document.createElement('input');
+  input.className = 'db-filter-val';
+  input.style.maxWidth = '260px';
+  input.placeholder = 'Describe a view — “high priority, due this month”';
+  const go = document.createElement('button');
+  go.textContent = '✦';
+  const run = () => { const v = input.value.trim(); wrap.remove(); if (v) aiMakeView(v); };
+  go.addEventListener('click', run);
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') run(); else if (e.key === 'Escape') wrap.remove(); });
+  wrap.append(input, go);
+  bar.appendChild(wrap);
+  input.focus();
+}
+
+/* ---------- entry points ---------------------------------------------------- */
+
+function openVaultAsk() {
+  if (!folder) { toast('Open a folder (⌘⇧O) to ask across your vault'); return; }
+  toggleAiPanel(true);
+  const input = $('ai-input');
+  input.value = '';
+  input.placeholder = 'Ask across your whole vault…';
+  input.dataset.vault = '1';
+  input.focus();
 }

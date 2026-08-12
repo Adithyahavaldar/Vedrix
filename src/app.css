@@ -2278,3 +2278,18 @@ body.mobile .hint-mobile { display: block; }
 .hist-empty { padding: 26px; text-align: center; color: var(--text-muted); font-size: 13px; }
 .hist-empty span { font-size: 12px; opacity: .8; }
 @media (max-width: 760px) { #hist-body { grid-template-columns: 1fr; } #hist-list { max-height: 170px; border-right: none; border-bottom: 1px solid var(--border); } }
+
+/* ---- N8: workspace AI ---- */
+.ai-sources { margin-top: 8px; font-size: 11.5px; color: var(--text-muted); line-height: 1.45; }
+.ai-msg .wikilink.missing { color: var(--text-muted); border-bottom: 1px dashed var(--border); }
+.ai-proposal .prop-proposal { display: flex; flex-direction: column; gap: 5px; margin: 8px 0 4px; }
+.prop-prop-row {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  padding: 6px 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); cursor: pointer;
+}
+.prop-prop-row b { font-size: 12.5px; font-weight: 650; }
+.prop-prop-row .pp-val { font-size: 12.5px; color: var(--accent); }
+.prop-prop-row i { width: 100%; font-size: 11.5px; color: var(--text-muted); font-style: normal; }
+.db-aiv { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
+.db-aiv:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.db-aiview button { border: none; background: var(--accent); color: var(--accent-fg); border-radius: 6px; padding: 3px 9px; cursor: pointer; font-size: 12px; }
