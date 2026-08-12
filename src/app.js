@@ -1361,7 +1361,15 @@ function parseFm(text) {
 }
 
 function fmSerializeValue(v) {
-  if (Array.isArray(v)) return '[' + v.join(', ') + ']';
+  // Quote list items that contain YAML-significant characters. Without this a
+  // list of [[wikilinks]] serializes to [[[a]], [[b]]] — which reads back as one
+  // mangled link, i.e. we would write a format we cannot parse.
+  if (Array.isArray(v)) {
+    return '[' + v.map(x => {
+      const s = String(x);
+      return /[[\]{},:#"']/.test(s) ? JSON.stringify(s) : s;
+    }).join(', ') + ']';
+  }
   const s = String(v);
   // quote only when YAML would otherwise misread it
   return /^[\s]|[\s]$|^[#&*!|>%@`]|:\s|^-\s|^$/.test(s) ? JSON.stringify(s) : s;
@@ -6125,7 +6133,7 @@ boot();
    ========================================================================== */
 
 const DB_SCHEMA_FILE = '_vedrix.db.yaml';
-const DB_TYPES = ['text', 'number', 'select', 'multi_select', 'date', 'checkbox', 'url', 'relation'];
+const DB_TYPES = ['text', 'number', 'select', 'multi_select', 'date', 'checkbox', 'url', 'relation', 'formula', 'rollup'];
 const DB_SELECT_COLORS = ['#2f6bff', '#16a34a', '#d97706', '#dc2626', '#7c3aed', '#0891b2', '#db2777', '#65758b'];
 
 let db = null;   // { folder, schema, rows, viewIdx, search }
@@ -6323,7 +6331,9 @@ const dbJoin = (folder, name) => folder.replace(/[/\\]+$/, '') + '/' + name;
 
 // frontmatter block (raw) → { key: value } using the N1 parser
 function dbProps(fmText) {
-  const out = {};
+  // null prototype: a property named "constructor" or "__proto__" must resolve
+  // to the file's data or nothing at all — never to something off Object.prototype
+  const out = Object.create(null);
   parseFm(fmText || '').forEach(e => { out[e.key] = e.list && (e.inline || e.list.length) ? e.list : e.value; });
   return out;
 }
@@ -6342,7 +6352,7 @@ async function dbLoad(folder) {
   rows.forEach(r => Object.keys(r.props).forEach(k => {
     if (!schema.properties[k]) schema.properties[k] = { type: Array.isArray(r.props[k]) ? 'multi_select' : 'text' };
   }));
-  return { folder, schema, rows, viewIdx: 0, search: '' };
+  return { folder, schema, rows, viewIdx: 0, search: '', rel: {} };
 }
 
 async function dbSaveSchema() {
@@ -6359,6 +6369,8 @@ function dbCmp(a, b) {
 }
 
 function dbCellText(row, key) {
+  // formulas and rollups are computed, so filter/sort/search see real values
+  if (db && db.schema && dbIsComputed(key)) return String(dbValue(row, key));
   const v = row.props[key];
   if (Array.isArray(v)) return v.join(', ');
   return v == null ? '' : String(v);
@@ -6449,7 +6461,8 @@ function renderDb(t) {
   if (!db || db.folder !== t.dbFolder) {
     host.innerHTML = '<div class="db-loading">Loading database…</div>';
     dbLoad(t.dbFolder)
-      .then(loaded => {
+      .then(async (loaded) => {
+        await dbLoadRelations(loaded);      // rollups need their target rows in hand
         db = loaded;
         t.name = (db.schema.name || t.name) + '';
         renderTabStrip();
@@ -6550,9 +6563,20 @@ function renderDbBar() {
   };
 
   mk('View', view.type || 'table',
-    [{ value: 'table', label: 'Table' }, { value: 'board', label: 'Board' }],
-    v => { view.type = v; if (v === 'board' && !view.group) view.group = dbPropNames()[0] || ''; dbSaveSchema(); renderDbAll(); });
+    [{ value: 'table', label: 'Table' }, { value: 'board', label: 'Board' },
+     { value: 'calendar', label: 'Calendar' }, { value: 'gallery', label: 'Gallery' }],
+    v => {
+      view.type = v;
+      if (v === 'board' && !view.group) view.group = dbPropNames()[0] || '';
+      if (v === 'calendar' && !view.date) view.date = dbPropNames().find(p => (db.schema.properties[p] || {}).type === 'date') || '';
+      dbSaveSchema(); renderDbAll();
+    });
 
+  if ((view.type || 'table') === 'calendar') {
+    mk('Date by', view.date || '',
+      dbPropNames().map(p => ({ value: p, label: p })),
+      v => { view.date = v; dbSaveSchema(); renderDbBody(); });
+  }
   if ((view.type || 'table') === 'board') {
     mk('Group by', view.group || '',
       dbPropNames().map(p => ({ value: p, label: p })),
@@ -6636,7 +6660,10 @@ function renderDbBody() {
     body.innerHTML = '<div class="db-empty"><b>No pages yet</b><span>Every .md file in this folder becomes a row. Add one with “+ New”.</span></div>';
     return;
   }
-  if ((view.type || 'table') === 'board') renderDbBoard(body, rows, view);
+  const vtype = view.type || 'table';
+  if (vtype === 'board') renderDbBoard(body, rows, view);
+  else if (vtype === 'calendar') renderDbCalendar(body, rows, view);
+  else if (vtype === 'gallery') renderDbGallery(body, rows);
   else renderDbTable(body, rows);
   const count = document.createElement('div');
   count.className = 'db-count';
@@ -6699,6 +6726,35 @@ function dbCell(row, key) {
   const type = ((db.schema.properties[key] || {}).type) || 'text';
   const value = dbCellText(row, key);
 
+  // formulas and rollups are derived — there is nothing in the file to edit
+  if (type === 'formula' || type === 'rollup') {
+    const v = String(value);
+    td.className = 'db-cell db-computed';
+    td.title = type === 'formula'
+      ? 'Formula: ' + ((db.schema.properties[key] || {}).expr || '')
+      : 'Rollup of ' + ((db.schema.properties[key] || {}).target || '');
+    if (/^⚠/.test(v)) td.classList.add('db-fx-error');
+    td.textContent = v || '—';
+    if (!v) td.classList.add('db-blank');
+    return td;
+  }
+
+  // relations open a picker over the target database
+  if (type === 'relation') {
+    const names = dbWikiNames(row.props[key]);
+    if (!names.length) td.appendChild(Object.assign(document.createElement('span'), { className: 'db-blank', textContent: '—' }));
+    names.forEach(n => {
+      const chip = document.createElement('button');
+      chip.className = 'db-rel';
+      chip.textContent = n;
+      chip.addEventListener('click', (e) => { e.stopPropagation(); openWikiLink(n); });
+      td.appendChild(chip);
+    });
+    td.classList.add('db-editable');
+    td.addEventListener('click', () => dbEditRelation(td, row, key));
+    return td;
+  }
+
   if (type === 'checkbox') {
     const cb = document.createElement('input');
     cb.type = 'checkbox';
@@ -6717,16 +6773,6 @@ function dbCell(row, key) {
       td.appendChild(pill);
     });
     if (!parts.length) td.appendChild(Object.assign(document.createElement('span'), { className: 'db-blank', textContent: '—' }));
-    td.classList.add('db-editable');
-    td.addEventListener('click', () => dbEditCell(td, row, key, type));
-    return td;
-  }
-  if (type === 'relation' && /^\[\[.+\]\]$/.test(value.trim())) {
-    const link = document.createElement('button');
-    link.className = 'db-rel';
-    link.textContent = value.trim().slice(2, -2);
-    link.addEventListener('click', (e) => { e.stopPropagation(); openWikiLink(value.trim().slice(2, -2)); });
-    td.appendChild(link);
     td.classList.add('db-editable');
     td.addEventListener('click', () => dbEditCell(td, row, key, type));
     return td;
@@ -7402,4 +7448,527 @@ function registerBlockRules(td) {
     filter: (n) => n.nodeType === 1 && n.classList && n.classList.contains('vx-dbview'),
     replacement: (content, node) => '\n\n```vedrix-view\n' + (node.dataset.spec || '').trim() + '\n```\n\n',
   });
+}
+
+/* ==========================================================================
+   N5 — Databases v2: relations, rollups, formulas, calendar + gallery
+
+   Formulas are evaluated by a hand-written tokenizer/parser/interpreter.
+   NEVER eval() or new Function(): the expression comes out of a file on
+   disk, so running it as JavaScript would be arbitrary code execution from
+   untrusted content. The language below is closed — it can only do what
+   these functions allow.
+   ========================================================================== */
+
+/* ---------- tokenizer ----------------------------------------------------- */
+
+function fxTokenize(src) {
+  const out = [];
+  const s = String(src || '');
+  let i = 0;
+  const isDigit = c => c >= '0' && c <= '9';
+  const isIdent = c => /[A-Za-z_$À-￿]/.test(c);
+  while (i < s.length) {
+    const c = s[i];
+    if (/\s/.test(c)) { i++; continue; }
+    if (isDigit(c) || (c === '.' && isDigit(s[i + 1]))) {
+      let j = i;
+      while (j < s.length && (isDigit(s[j]) || s[j] === '.')) j++;
+      out.push({ t: 'num', v: Number(s.slice(i, j)) });
+      i = j; continue;
+    }
+    if (c === '"' || c === "'") {
+      let j = i + 1, buf = '';
+      while (j < s.length && s[j] !== c) {
+        if (s[j] === '\\' && j + 1 < s.length) { buf += s[j + 1]; j += 2; continue; }
+        buf += s[j]; j++;
+      }
+      out.push({ t: 'str', v: buf });
+      i = j + 1; continue;
+    }
+    if (isIdent(c)) {
+      let j = i;
+      while (j < s.length && (isIdent(s[j]) || isDigit(s[j]) || s[j] === ' ' && false)) j++;
+      out.push({ t: 'ident', v: s.slice(i, j) });
+      i = j; continue;
+    }
+    const three = s.slice(i, i + 2);
+    if (['==', '!=', '>=', '<=', '&&', '||'].includes(three)) { out.push({ t: 'op', v: three }); i += 2; continue; }
+    if ('+-*/%<>!(),?:'.includes(c)) { out.push({ t: 'op', v: c }); i++; continue; }
+    throw new Error('Unexpected character “' + c + '”');
+  }
+  out.push({ t: 'end' });
+  return out;
+}
+
+/* ---------- parser (precedence climbing) → AST ---------------------------- */
+
+const FX_BINARY = [
+  ['||', 'or'], ['&&', 'and'],
+  ['==', '!=', '<', '>', '<=', '>='],
+  ['+', '-'],
+  ['*', '/', '%'],
+];
+
+function fxParse(src) {
+  const toks = fxTokenize(src);
+  let p = 0;
+  const peek = () => toks[p];
+  const eat = (v) => { if (toks[p].v === v || toks[p].t === v) return toks[p++]; return null; };
+  const expect = (v) => { const t = eat(v); if (!t) throw new Error('Expected ' + v); return t; };
+
+  function primary() {
+    const t = peek();
+    if (t.t === 'num') { p++; return { k: 'num', v: t.v }; }
+    if (t.t === 'str') { p++; return { k: 'str', v: t.v }; }
+    if (t.t === 'op' && (t.v === '-' || t.v === '!')) { p++; return { k: 'unary', op: t.v, a: primary() }; }
+    if (t.t === 'ident' && t.v.toLowerCase() === 'not') { p++; return { k: 'unary', op: '!', a: primary() }; }
+    if (t.t === 'op' && t.v === '(') { p++; const e = expr(0); expect(')'); return e; }
+    if (t.t === 'ident') {
+      p++;
+      const name = t.v;
+      if (peek().t === 'op' && peek().v === '(') {
+        p++;
+        const args = [];
+        if (!(peek().t === 'op' && peek().v === ')')) {
+          for (;;) { args.push(expr(0)); if (peek().t === 'op' && peek().v === ',') { p++; continue; } break; }
+        }
+        expect(')');
+        return { k: 'call', name, args };
+      }
+      const low = name.toLowerCase();
+      if (low === 'true') return { k: 'bool', v: true };
+      if (low === 'false') return { k: 'bool', v: false };
+      return { k: 'ref', name };                 // bare identifier = property name
+    }
+    throw new Error('Unexpected ' + (t.t === 'end' ? 'end of formula' : '“' + t.v + '”'));
+  }
+
+  function expr(level) {
+    if (level >= FX_BINARY.length) return primary();
+    let left = expr(level + 1);
+    for (;;) {
+      const t = peek();
+      const ops = FX_BINARY[level];
+      const match = t.t === 'op' ? ops.includes(t.v)
+        : (t.t === 'ident' && ops.includes(String(t.v).toLowerCase()));
+      if (!match) break;
+      const op = t.t === 'op' ? t.v : String(t.v).toLowerCase();
+      p++;
+      const right = expr(level + 1);
+      left = { k: 'bin', op: op === 'or' ? '||' : op === 'and' ? '&&' : op, a: left, b: right };
+    }
+    // ternary sits above the binaries
+    if (level === 0 && peek().t === 'op' && peek().v === '?') {
+      p++;
+      const a = expr(0); expect(':'); const b = expr(0);
+      return { k: 'cond', c: left, a, b };
+    }
+    return left;
+  }
+
+  const ast = expr(0);
+  if (peek().t !== 'end') throw new Error('Unexpected “' + peek().v + '”');
+  return ast;
+}
+
+/* ---------- evaluator ----------------------------------------------------- */
+
+const fxNum = (v) => {
+  if (typeof v === 'number') return v;
+  if (typeof v === 'boolean') return v ? 1 : 0;
+  const n = Number(String(v == null ? '' : v).trim());
+  return isNaN(n) ? 0 : n;
+};
+const fxStr = (v) => v == null ? '' : (v instanceof Date ? v.toISOString().slice(0, 10) : String(v));
+const fxTruthy = (v) => {
+  if (typeof v === 'boolean') return v;
+  if (typeof v === 'number') return v !== 0;
+  const s = fxStr(v).trim().toLowerCase();
+  return !!s && s !== 'false' && s !== '0' && s !== 'no';
+};
+const fxDate = (v) => {
+  if (v instanceof Date) return v;
+  const s = fxStr(v).trim();
+  if (!s) return null;
+  const d = new Date(/^\d{4}-\d{2}-\d{2}$/.test(s) ? s + 'T00:00:00' : s);
+  return isNaN(d.getTime()) ? null : d;
+};
+const FX_DAY = 86400000;
+
+const FX_FUNCS = {
+  if: (c, a, b) => fxTruthy(c) ? a : (b === undefined ? '' : b),
+  and: (...a) => a.every(fxTruthy),
+  or: (...a) => a.some(fxTruthy),
+  not: (a) => !fxTruthy(a),
+  empty: (a) => !fxStr(a).trim(),
+  concat: (...a) => a.map(fxStr).join(''),
+  join: (sep, ...a) => a.map(fxStr).filter(Boolean).join(fxStr(sep)),
+  length: (a) => Array.isArray(a) ? a.length : fxStr(a).length,
+  upper: (a) => fxStr(a).toUpperCase(),
+  lower: (a) => fxStr(a).toLowerCase(),
+  trim: (a) => fxStr(a).trim(),
+  contains: (a, b) => fxStr(a).toLowerCase().includes(fxStr(b).toLowerCase()),
+  startswith: (a, b) => fxStr(a).toLowerCase().startsWith(fxStr(b).toLowerCase()),
+  endswith: (a, b) => fxStr(a).toLowerCase().endsWith(fxStr(b).toLowerCase()),
+  replace: (a, b, c) => fxStr(a).split(fxStr(b)).join(fxStr(c)),
+  slice: (a, s, e) => fxStr(a).slice(fxNum(s), e === undefined ? undefined : fxNum(e)),
+  number: fxNum,
+  text: fxStr,
+  round: (a, n) => { const f = Math.pow(10, n === undefined ? 0 : fxNum(n)); return Math.round(fxNum(a) * f) / f; },
+  floor: (a) => Math.floor(fxNum(a)),
+  ceil: (a) => Math.ceil(fxNum(a)),
+  abs: (a) => Math.abs(fxNum(a)),
+  min: (...a) => Math.min(...a.map(fxNum)),
+  max: (...a) => Math.max(...a.map(fxNum)),
+  sum: (...a) => a.flat().reduce((s, v) => s + fxNum(v), 0),
+  today: () => new Date(new Date().toDateString()),
+  now: () => new Date(),
+  year: (d) => { const x = fxDate(d); return x ? x.getFullYear() : 0; },
+  month: (d) => { const x = fxDate(d); return x ? x.getMonth() + 1 : 0; },
+  day: (d) => { const x = fxDate(d); return x ? x.getDate() : 0; },
+  datediff: (a, b, unit) => {
+    const x = fxDate(a), y = fxDate(b);
+    if (!x || !y) return 0;
+    const days = Math.round((x - y) / FX_DAY);
+    const u = fxStr(unit || 'days').toLowerCase();
+    return u.startsWith('week') ? Math.round(days / 7) : u.startsWith('month') ? Math.round(days / 30) : u.startsWith('year') ? Math.round(days / 365) : days;
+  },
+  dateadd: (d, n, unit) => {
+    const x = fxDate(d);
+    if (!x) return '';
+    const u = fxStr(unit || 'days').toLowerCase();
+    const mult = u.startsWith('week') ? 7 : 1;
+    const out = new Date(x.getTime());
+    if (u.startsWith('month')) out.setMonth(out.getMonth() + fxNum(n));
+    else if (u.startsWith('year')) out.setFullYear(out.getFullYear() + fxNum(n));
+    else out.setDate(out.getDate() + fxNum(n) * mult);
+    return out;
+  },
+  formatdate: (d, fmt) => {
+    const x = fxDate(d);
+    if (!x) return '';
+    const pad = (n) => String(n).padStart(2, '0');
+    return fxStr(fmt || 'YYYY-MM-DD')
+      .replace(/YYYY/g, x.getFullYear())
+      .replace(/MM/g, pad(x.getMonth() + 1))
+      .replace(/DD/g, pad(x.getDate()));
+  },
+};
+
+function fxEval(node, ctx) {
+  switch (node.k) {
+    case 'num': case 'str': case 'bool': return node.v;
+    case 'ref': return ctx.get(node.name);
+    case 'unary': {
+      const v = fxEval(node.a, ctx);
+      return node.op === '-' ? -fxNum(v) : !fxTruthy(v);
+    }
+    case 'cond': return fxTruthy(fxEval(node.c, ctx)) ? fxEval(node.a, ctx) : fxEval(node.b, ctx);
+    case 'bin': {
+      const op = node.op;
+      if (op === '&&') return fxTruthy(fxEval(node.a, ctx)) ? fxEval(node.b, ctx) : false;
+      if (op === '||') { const a = fxEval(node.a, ctx); return fxTruthy(a) ? a : fxEval(node.b, ctx); }
+      const a = fxEval(node.a, ctx), b = fxEval(node.b, ctx);
+      switch (op) {
+        case '+': {
+          const da = fxDate(a);
+          if (typeof a === 'string' && !/^\s*-?[\d.]+\s*$/.test(a) && !da) return fxStr(a) + fxStr(b);
+          if (typeof b === 'string' && !/^\s*-?[\d.]+\s*$/.test(b)) return fxStr(a) + fxStr(b);
+          return fxNum(a) + fxNum(b);
+        }
+        case '-': {
+          const da = fxDate(a), dbb = fxDate(b);
+          if (da && dbb && typeof a !== 'number' && typeof b !== 'number') return Math.round((da - dbb) / FX_DAY);
+          return fxNum(a) - fxNum(b);
+        }
+        case '*': return fxNum(a) * fxNum(b);
+        case '/': return fxNum(b) === 0 ? 0 : fxNum(a) / fxNum(b);
+        case '%': return fxNum(b) === 0 ? 0 : fxNum(a) % fxNum(b);
+        case '==': return fxStr(a).toLowerCase() === fxStr(b).toLowerCase();
+        case '!=': return fxStr(a).toLowerCase() !== fxStr(b).toLowerCase();
+        default: {
+          const da = fxDate(a), dbb = fxDate(b);
+          const na = da && dbb ? da.getTime() : fxNum(a);
+          const nb = da && dbb ? dbb.getTime() : fxNum(b);
+          return op === '<' ? na < nb : op === '>' ? na > nb : op === '<=' ? na <= nb : na >= nb;
+        }
+      }
+    }
+    case 'call': {
+      const name = String(node.name).toLowerCase();
+      if (name === 'prop') {
+        const key = fxEval(node.args[0], ctx);
+        return ctx.get(fxStr(key));
+      }
+      const fn = FX_FUNCS[name];
+      if (!fn) throw new Error('Unknown function “' + node.name + '”');
+      return fn(...node.args.map(a => fxEval(a, ctx)));
+    }
+    default: throw new Error('Bad expression');
+  }
+}
+
+const fxCache = new Map();
+function fxCompile(expr) {
+  if (fxCache.has(expr)) return fxCache.get(expr);
+  let compiled;
+  try { compiled = { ast: fxParse(expr) }; }
+  catch (err) { compiled = { error: err.message }; }
+  fxCache.set(expr, compiled);
+  return compiled;
+}
+
+/* ---------- computed properties: formulas + rollups ----------------------- */
+
+// Related databases are loaded once per database open and cached here so
+// rollups can be computed synchronously while rendering.
+async function dbLoadRelations(loaded) {
+  loaded.rel = loaded.rel || {};
+  const props = loaded.schema.properties || {};
+  const wanted = new Set();
+  Object.keys(props).forEach(k => {
+    const p = props[k];
+    if (p && (p.type === 'relation') && p.to) wanted.add(String(p.to));
+  });
+  for (const name of wanted) {
+    if (loaded.rel[name]) continue;
+    const root = folder && folder.root;
+    const path = /^[/~]|^[A-Za-z]:/.test(name) ? name
+      : (root ? root.replace(/[/\\]+$/, '') + '/' + name : dbJoin(loaded.folder.replace(/\/[^/\\]+$/, ''), name));
+    try { loaded.rel[name] = await dbLoad(path); } catch (_) { loaded.rel[name] = null; }
+  }
+  return loaded;
+}
+
+const dbWikiNames = (v) => (Array.isArray(v) ? v : [v])
+  .map(x => String(x == null ? '' : x).trim())
+  .flatMap(s => (s.match(/\[\[([^\]]+)\]\]/g) || (s ? [s] : [])))
+  .map(s => s.replace(/^\[\[|\]\]$/g, '').split('|')[0].trim())
+  .filter(Boolean);
+
+// rows in the related database that this row points at
+function dbRelatedRows(row, relKey) {
+  const p = dbProp(relKey);
+  const target = p.to && db.rel ? db.rel[String(p.to)] : null;
+  if (!target) return [];
+  const names = dbWikiNames(row.props[relKey]);
+  const lower = names.map(n => n.toLowerCase().replace(/\.md$/i, ''));
+  return target.rows.filter(r => lower.includes(r.title.toLowerCase()));
+}
+
+function dbRollup(row, key) {
+  const p = dbProp(key);
+  const rows = dbRelatedRows(row, p.relation);
+  const vals = rows.map(r => {
+    const v = r.props[p.target];
+    return Array.isArray(v) ? v.join(', ') : v;
+  }).filter(v => v != null && v !== '');
+  const fn = String(p.fn || p.calculate || 'show').toLowerCase();
+  switch (fn) {
+    case 'count': return rows.length;
+    case 'count_values': case 'countvalues': return vals.length;
+    case 'sum': return vals.reduce((s, v) => s + fxNum(v), 0);
+    case 'avg': case 'average': return vals.length ? Math.round((vals.reduce((s, v) => s + fxNum(v), 0) / vals.length) * 100) / 100 : 0;
+    case 'min': return vals.length ? vals.map(fxNum).reduce((a, b) => Math.min(a, b)) : '';
+    case 'max': return vals.length ? vals.map(fxNum).reduce((a, b) => Math.max(a, b)) : '';
+    case 'earliest': return vals.slice().sort()[0] || '';
+    case 'latest': return vals.slice().sort().pop() || '';
+    case 'unique': return [...new Set(vals.map(String))].join(', ');
+    case 'checked': return vals.filter(v => fxTruthy(v)).length;
+    case 'percent_checked': return vals.length ? Math.round(vals.filter(v => fxTruthy(v)).length / vals.length * 100) + '%' : '';
+    default: return vals.join(', ');
+  }
+}
+
+// Value of any property, computing formulas/rollups on demand. `seen` breaks
+// formula cycles (a formula that references itself, directly or indirectly).
+function dbValue(row, key, seen) {
+  const p = dbProp(key);
+  if (p.type === 'rollup') return dbRollup(row, key);
+  if (p.type === 'formula') {
+    const guard = seen || new Set();
+    if (guard.has(key)) return '⟲';                     // cycle
+    guard.add(key);
+    const compiled = fxCompile(String(p.expr || p.formula || ''));
+    if (compiled.error) return '⚠ ' + compiled.error;
+    try {
+      const ctx = {
+        get: (name) => {
+          if (name === 'Name' || name === 'title') return row.title;
+          const prop = dbProp(name);
+          if (prop.type === 'formula' || prop.type === 'rollup') return dbValue(row, name, guard);
+          const v = Object.prototype.hasOwnProperty.call(row.props, name) ? row.props[name] : '';
+          return Array.isArray(v) ? v.join(', ') : (v == null ? '' : v);
+        },
+      };
+      const out = fxEval(compiled.ast, ctx);
+      if (out instanceof Date) return out.toISOString().slice(0, 10);
+      if (typeof out === 'boolean') return out ? 'Yes' : 'No';
+      if (typeof out === 'number') return Number.isInteger(out) ? String(out) : String(Math.round(out * 1000) / 1000);
+      return out;
+    } catch (err) { return '⚠ ' + err.message; }
+  }
+  const v = row.props[key];
+  return Array.isArray(v) ? v.join(', ') : (v == null ? '' : v);
+}
+
+// schema.properties comes from a parsed file, so look keys up safely: an
+// inherited Object.prototype member must never masquerade as a property
+function dbProp(key) {
+  const props = (db && db.schema && db.schema.properties) || {};
+  return Object.prototype.hasOwnProperty.call(props, key) ? (props[key] || {}) : {};
+}
+
+const dbIsComputed = (key) => {
+  const t = dbProp(key).type;
+  return t === 'formula' || t === 'rollup';
+};
+
+/* ---------- relation cell picker ------------------------------------------ */
+
+function dbEditRelation(td, row, key) {
+  const p = dbProp(key);
+  const target = p.to && db.rel ? db.rel[String(p.to)] : null;
+  if (!target) { toast('Set “to:” on this relation to a database folder'); return; }
+  const current = new Set(dbWikiNames(row.props[key]).map(s => s.toLowerCase()));
+  const pop = document.createElement('div');
+  pop.className = 'db-relpop';
+  const search = document.createElement('input');
+  search.className = 'db-input';
+  search.placeholder = 'Link a page…';
+  pop.appendChild(search);
+  const list = document.createElement('div');
+  list.className = 'db-rellist';
+  pop.appendChild(list);
+  const draw = () => {
+    const q = search.value.trim().toLowerCase();
+    list.innerHTML = '';
+    target.rows.filter(r => !q || r.title.toLowerCase().includes(q)).slice(0, 40).forEach(r => {
+      const b = document.createElement('button');
+      b.className = 'db-relitem' + (current.has(r.title.toLowerCase()) ? ' on' : '');
+      b.textContent = r.title;
+      b.addEventListener('mousedown', async (e) => {
+        e.preventDefault();
+        const k = r.title.toLowerCase();
+        if (current.has(k)) current.delete(k); else current.add(k);
+        const names = target.rows.filter(x => current.has(x.title.toLowerCase())).map(x => '[[' + x.title + ']]');
+        await dbSetRowProp(row, key, names.length ? (names.length === 1 ? names[0] : names) : null);
+        renderDbBody();
+      });
+      list.appendChild(b);
+    });
+    if (!list.children.length) list.innerHTML = '<div class="db-relempty">No pages in ' + escHtml(String(p.to)) + '</div>';
+  };
+  search.addEventListener('input', draw);
+  draw();
+  td.innerHTML = '';
+  td.appendChild(pop);
+  search.focus();
+  const close = (e) => { if (!pop.contains(e.target)) { document.removeEventListener('mousedown', close); renderDbBody(); } };
+  setTimeout(() => document.addEventListener('mousedown', close), 0);
+}
+
+/* ---------- calendar view -------------------------------------------------- */
+
+function renderDbCalendar(host, rows, view) {
+  const key = view.date || dbPropNames().find(p => (db.schema.properties[p] || {}).type === 'date');
+  if (!key) { host.innerHTML = '<div class="db-empty"><b>No date property</b><span>Add one to use the calendar.</span></div>'; return; }
+  const cursor = view._month ? new Date(view._month) : (() => { const d = new Date(); d.setDate(1); return d; })();
+  cursor.setDate(1);
+  const wrap = document.createElement('div');
+  wrap.className = 'db-cal';
+
+  const head = document.createElement('div');
+  head.className = 'db-cal-head';
+  const prev = document.createElement('button'); prev.textContent = '‹'; prev.title = 'Previous month';
+  const next = document.createElement('button'); next.textContent = '›'; next.title = 'Next month';
+  const label = document.createElement('b');
+  label.textContent = cursor.toLocaleString(undefined, { month: 'long', year: 'numeric' });
+  const today = document.createElement('button'); today.textContent = 'Today'; today.className = 'db-cal-today';
+  prev.addEventListener('click', () => { const d = new Date(cursor); d.setMonth(d.getMonth() - 1); view._month = d.toISOString(); renderDbBody(); });
+  next.addEventListener('click', () => { const d = new Date(cursor); d.setMonth(d.getMonth() + 1); view._month = d.toISOString(); renderDbBody(); });
+  today.addEventListener('click', () => { view._month = null; renderDbBody(); });
+  head.append(prev, label, next, today);
+  wrap.appendChild(head);
+
+  const grid = document.createElement('div');
+  grid.className = 'db-cal-grid';
+  ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].forEach(d => {
+    grid.appendChild(Object.assign(document.createElement('div'), { className: 'db-cal-dow', textContent: d }));
+  });
+  const first = new Date(cursor);
+  const offset = (first.getDay() + 6) % 7;                     // Monday-first
+  const start = new Date(first); start.setDate(1 - offset);
+  const byDay = new Map();
+  rows.forEach(r => {
+    const d = fxDate(dbValue(r, key));
+    if (!d) return;
+    const k = d.toISOString().slice(0, 10);
+    if (!byDay.has(k)) byDay.set(k, []);
+    byDay.get(k).push(r);
+  });
+  const todayKey = new Date(new Date().toDateString()).toISOString().slice(0, 10);
+  for (let i = 0; i < 42; i++) {
+    const day = new Date(start); day.setDate(start.getDate() + i);
+    const iso = day.toISOString().slice(0, 10);
+    const cell = document.createElement('div');
+    cell.className = 'db-cal-cell' + (day.getMonth() === cursor.getMonth() ? '' : ' out') + (iso === todayKey ? ' today' : '');
+    cell.appendChild(Object.assign(document.createElement('span'), { className: 'db-cal-num', textContent: String(day.getDate()) }));
+    (byDay.get(iso) || []).forEach(r => {
+      const chip = document.createElement('button');
+      chip.className = 'db-cal-chip';
+      chip.textContent = r.title;
+      chip.title = r.title;
+      chip.addEventListener('click', () => dbOpenRow(r));
+      cell.appendChild(chip);
+    });
+    grid.appendChild(cell);
+  }
+  wrap.appendChild(grid);
+  host.appendChild(wrap);
+}
+
+/* ---------- gallery view --------------------------------------------------- */
+
+function renderDbGallery(host, rows) {
+  const grid = document.createElement('div');
+  grid.className = 'db-gallery';
+  const props = dbPropNames().slice(0, 3);
+  rows.forEach(r => {
+    const card = document.createElement('button');
+    card.className = 'db-gcard';
+    card.addEventListener('click', () => dbOpenRow(r));
+    const cover = r.props.cover || r.props.Cover || '';
+    const top = document.createElement('div');
+    top.className = 'db-gcover';
+    if (cover && TAURI) {
+      const img = document.createElement('img');
+      const dir = r.path.slice(0, r.path.lastIndexOf('/'));
+      const src = String(cover);
+      img.src = /^(https?:|data:)/i.test(src) ? src : TAURI.core.convertFileSrc(src.startsWith('/') ? src : dir + '/' + src);
+      img.alt = '';
+      top.appendChild(img);
+    } else {
+      top.classList.add('db-gcover-blank');
+      top.textContent = (r.title[0] || '?').toUpperCase();
+    }
+    card.appendChild(top);
+    const body = document.createElement('div');
+    body.className = 'db-gbody';
+    body.appendChild(Object.assign(document.createElement('div'), { className: 'db-gtitle', textContent: r.title }));
+    props.forEach(p => {
+      const v = dbValue(r, p);
+      if (!v) return;
+      const type = (db.schema.properties[p] || {}).type;
+      const el = document.createElement('span');
+      el.className = type === 'select' ? 'db-pill' : 'db-card-prop';
+      if (type === 'select') el.style.setProperty('--pill', dbOptColor(p, String(v)));
+      el.textContent = String(v);
+      body.appendChild(el);
+    });
+    card.appendChild(body);
+    grid.appendChild(card);
+  });
+  host.appendChild(grid);
 }
