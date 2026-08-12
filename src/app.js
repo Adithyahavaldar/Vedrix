@@ -3056,6 +3056,7 @@ function cmdActions() {
       id: 'tpl-' + tpl.rel, label: 'New page from template: ' + tpl.title, hint: '', icon: 'doc',
       run: () => { closeCmd(); newFromTemplate(tpl); },
     }));
+    list.push({ id: 'publish', label: 'Publish this folder as a site…', hint: '', icon: 'doc', run: () => { closeCmd(); publishSite(folder.root); } });
     list.push({ id: 'open-db', label: 'Open this folder as a database', hint: '', icon: 'doc', run: () => { closeCmd(); createDatabaseHere(folder.root); } });
     list.push({ id: 'new-db', label: 'New database here', hint: '', icon: 'doc', run: () => { closeCmd(); createDatabaseHere(folder.root); } });
   }
@@ -7971,4 +7972,390 @@ function renderDbGallery(host, rows) {
     grid.appendChild(card);
   });
   host.appendChild(grid);
+}
+
+/* ==========================================================================
+   N7 — Publish
+
+   Turn a folder into a shareable site: ONE self-contained .html file.
+
+   Pages are rendered here, with the app's own markdown pipeline, so callouts,
+   columns, toggles, math and diagrams come out exactly as they look in Vedrix
+   — and the published file needs no markdown library, no server and no network.
+   It opens from a file:// URL, an S3 bucket or GitHub Pages identically.
+
+   [[wikilinks]] become internal anchors, ![[embeds]] are inlined at build
+   time, andeach database folder is rendered as a table.
+   ========================================================================== */
+
+const PUB_SKIP_DIRS = /(^|[/\\])(_templates|\.obsidian|\.git|node_modules)([/\\]|$)/i;
+
+function pubSlug(rel) {
+  return String(rel).replace(/\.(md|markdown)$/i, '')
+    .toLowerCase().replace(/[^\w\s/-]/g, '').trim()
+    .replace(/[\s/]+/g, '-').replace(/-+/g, '-') || 'page';
+}
+
+// flatten the native dir tree into the .md files we publish
+function pubCollect(tree, out, prefix) {
+  (tree || []).forEach(node => {
+    const rel = prefix ? prefix + '/' + node.name : node.name;
+    if (node.dir) { if (!PUB_SKIP_DIRS.test(rel)) pubCollect(node.children, out, rel); return; }
+    if (!/\.(md|markdown)$/i.test(node.name)) return;
+    if (node.name.startsWith('_') || node.name.startsWith('.')) return;
+    if (PUB_SKIP_DIRS.test(rel)) return;
+    out.push({ path: node.path, rel, name: node.name, title: node.name.replace(/\.(md|markdown)$/i, ''), group: prefix || '' });
+  });
+  return out;
+}
+
+async function pubReadFile(path) {
+  if (TAURI) { try { return (await TAURI.core.invoke('read_md_file', { path })).text; } catch (_) { return ''; } }
+  return (window.__dbMock && window.__dbMock.files[path]) || '';
+}
+
+// Render one page to final HTML: markdown → DOM → rewrite links, inline
+// embeds, expand database blocks → serialize.
+async function pubRenderPage(page, index, opts) {
+  const raw = await pubReadFile(page.path);
+  const { body } = splitFm(raw);
+  const host = document.createElement('div');
+  host.innerHTML = DOMPurify.sanitize(md.render(body), {
+    ADD_ATTR: ['data-wiki', 'data-bid', 'data-embed', 'data-cols', 'open'],
+  });
+
+  // [[wikilinks]] → internal anchors (or plain text when the page isn't published)
+  host.querySelectorAll('a.wikilink[data-wiki]').forEach(a => {
+    const target = (a.getAttribute('data-wiki') || '').split('#')[0].trim().toLowerCase();
+    const hit = index.byTitle.get(target) || index.byRel.get(target);
+    if (hit) { a.setAttribute('href', '#' + hit.slug); a.removeAttribute('data-wiki'); }
+    else { const s = document.createElement('span'); s.className = 'pub-deadlink'; s.textContent = a.textContent; a.replaceWith(s); }
+  });
+
+  // ![[embeds]] resolved at build time — the published file fetches nothing
+  for (const el of [...host.querySelectorAll('.vx-embed[data-embed]')]) {
+    const rawT = el.getAttribute('data-embed') || '';
+    const hash = rawT.indexOf('#');
+    const target = (hash > -1 ? rawT.slice(0, hash) : rawT).trim().toLowerCase();
+    const frag = hash > -1 ? rawT.slice(hash + 1).trim() : '';
+    const hit = index.byTitle.get(target) || index.byRel.get(target);
+    const bodyEl = el.querySelector('.vx-embed-body');
+    if (!hit || !bodyEl) { el.remove(); continue; }
+    const text = await pubReadFile(hit.path);
+    const slice = extractFragment(text, frag);
+    bodyEl.className = 'vx-embed-body';
+    bodyEl.innerHTML = slice ? DOMPurify.sanitize(md.render(slice), { ADD_ATTR: ['data-wiki', 'data-bid'] }) : '';
+    bodyEl.querySelectorAll('a.wikilink[data-wiki]').forEach(a => {
+      const t2 = (a.getAttribute('data-wiki') || '').split('#')[0].trim().toLowerCase();
+      const h2 = index.byTitle.get(t2) || index.byRel.get(t2);
+      if (h2) { a.setAttribute('href', '#' + h2.slug); a.removeAttribute('data-wiki'); }
+    });
+    const head = el.querySelector('.vx-embed-head');
+    if (head) {
+      head.innerHTML = '<span class="vx-embed-src">' + escHtml(hit.title) + (frag ? ' › ' + escHtml(frag) : '') + '</span>';
+      const link = document.createElement('a');
+      link.className = 'vx-embed-open';
+      link.href = '#' + hit.slug;
+      link.textContent = 'Open';
+      head.appendChild(link);
+    }
+    el.removeAttribute('contenteditable');
+  }
+
+  // ```vedrix-view fences → a rendered table of that database
+  for (const pre of [...host.querySelectorAll('pre > code.language-vedrix-view')].map(c => c.parentElement)) {
+    const spec = parseYamlLite(pre.textContent || '') || {};
+    const dbEntry = index.dbs.find(d => d.name.toLowerCase() === String(spec.folder || '').toLowerCase()
+                                     || d.rel.toLowerCase() === String(spec.folder || '').toLowerCase());
+    if (!dbEntry) { pre.replaceWith(pubNote('Database “' + escHtml(String(spec.folder || '')) + '” was not published.')); continue; }
+    pre.replaceWith(pubDbTable(dbEntry, index, Number(spec.limit) || 0));
+  }
+
+  // strip editor-only affordances
+  host.querySelectorAll('.vx-bid').forEach(n => n.remove());
+  host.querySelectorAll('[contenteditable]').forEach(n => n.removeAttribute('contenteditable'));
+  return host.innerHTML;
+}
+
+function pubNote(html) {
+  const d = document.createElement('div');
+  d.className = 'pub-note';
+  d.innerHTML = html;
+  return d;
+}
+
+// A database folder rendered as a static table (computed columns included).
+function pubDbTable(dbEntry, index, limit) {
+  const loaded = dbEntry.loaded;
+  const wrap = document.createElement('div');
+  wrap.className = 'pub-db';
+  const head = document.createElement('div');
+  head.className = 'pub-db-head';
+  head.innerHTML = '<b>' + escHtml(loaded.schema.name || dbEntry.name) + '</b>';
+  wrap.appendChild(head);
+  const props = Object.keys(loaded.schema.properties || {});
+  const prev = db;
+  db = loaded;
+  let rows;
+  try { loaded.viewIdx = 0; rows = dbVisibleRows(); } finally { db = prev; }
+  if (limit > 0) rows = rows.slice(0, limit);
+  const table = document.createElement('table');
+  const thead = document.createElement('thead');
+  const hr = document.createElement('tr');
+  hr.appendChild(Object.assign(document.createElement('th'), { textContent: 'Name' }));
+  props.forEach(p => hr.appendChild(Object.assign(document.createElement('th'), { textContent: p })));
+  thead.appendChild(hr);
+  table.appendChild(thead);
+  const tb = document.createElement('tbody');
+  const prev2 = db;
+  db = loaded;
+  try {
+    rows.forEach(r => {
+      const tr = document.createElement('tr');
+      const td = document.createElement('td');
+      const hit = index.byPath.get(r.path);
+      if (hit) { const a = document.createElement('a'); a.href = '#' + hit.slug; a.textContent = r.title; td.appendChild(a); }
+      else td.textContent = r.title;
+      tr.appendChild(td);
+      props.forEach(p => {
+        const cell = document.createElement('td');
+        const v = String(dbValue(r, p) ?? '');
+        if (v && (loaded.schema.properties[p] || {}).type === 'select') {
+          const pill = document.createElement('span');
+          pill.className = 'pub-pill';
+          pill.textContent = v;
+          pill.style.setProperty('--pill', dbOptColor(p, v));
+          cell.appendChild(pill);
+        } else cell.textContent = v || '—';
+        tr.appendChild(cell);
+      });
+      tb.appendChild(tr);
+    });
+  } finally { db = prev2; }
+  table.appendChild(tb);
+  wrap.appendChild(table);
+  return wrap;
+}
+
+/* ---------- the generated site -------------------------------------------- */
+
+function pubSiteHtml(site) {
+  const json = JSON.stringify(site).replace(/</g, '\\u003c');
+  return `<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escHtml(site.title)}</title>
+<style>
+:root{--bg:#fbfbfd;--panel:#fff;--fg:#16202e;--muted:#5d6879;--faint:#8d96a5;--border:#e5e9f0;--accent:#2f6bff;--code:#f1f4fa;--shadow:0 1px 2px rgba(20,30,60,.05),0 10px 30px -18px rgba(20,30,60,.25)}
+@media (prefers-color-scheme:dark){html[data-theme="auto"]{--bg:#0d1220;--panel:#131a2a;--fg:#e3e9f7;--muted:#9aa6bf;--faint:#6c778f;--border:#222b3e;--accent:#6d97ff;--code:#182136;--shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px -18px rgba(0,0,0,.7)}}
+html[data-theme="dark"]{--bg:#0d1220;--panel:#131a2a;--fg:#e3e9f7;--muted:#9aa6bf;--faint:#6c778f;--border:#222b3e;--accent:#6d97ff;--code:#182136}
+*{box-sizing:border-box}html,body{margin:0;padding:0}
+body{background:var(--bg);color:var(--fg);font:16px/1.65 'Hanken Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+.wrap{display:grid;grid-template-columns:274px minmax(0,1fr);min-height:100vh}
+.side{background:var(--panel);border-right:1px solid var(--border);position:sticky;top:0;height:100vh;overflow-y:auto;padding:22px 16px 30px}
+.brand{display:flex;align-items:center;gap:11px;margin-bottom:16px;padding:0 6px}
+.mark{width:34px;height:34px;border-radius:10px;background:var(--accent);display:grid;place-items:center;flex:0 0 auto}
+.mark svg{width:20px;height:20px}
+.brand b{font-size:15px;font-weight:650;letter-spacing:-.01em;display:block;line-height:1.15}
+.brand span{font-size:11.5px;color:var(--muted)}
+.q{width:100%;height:32px;padding:0 11px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--fg);font:inherit;font-size:13px;margin-bottom:12px}
+.q:focus{outline:none;border-color:var(--accent)}
+.grp{font-size:10.5px;font-weight:650;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);padding:12px 8px 5px}
+.nav a{display:block;padding:6px 9px;border-radius:8px;font-size:13.5px;color:var(--muted);line-height:1.35}
+.nav a:hover{background:color-mix(in srgb,var(--accent) 8%,transparent);color:var(--fg);text-decoration:none}
+.nav a.on{background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent);font-weight:600}
+.main{min-width:0}
+.top{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:12px;padding:12px 30px;background:color-mix(in srgb,var(--bg) 85%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--border)}
+.crumb{font-size:13px;color:var(--muted)}.crumb b{color:var(--fg)}
+.sp{flex:1}
+.tbtn{height:32px;padding:0 12px;border-radius:8px;border:1px solid var(--border);background:var(--panel);color:var(--muted);font:inherit;font-size:12.5px;cursor:pointer}
+.tbtn:hover{color:var(--fg);border-color:var(--accent)}
+.doc{max-width:790px;margin:0 auto;padding:34px 30px 90px}
+.doc h1{font-family:'Newsreader',Georgia,serif;font-weight:600;font-size:34px;line-height:1.15;margin:0 0 20px;letter-spacing:-.01em}
+.doc h2{font-size:22px;font-weight:680;margin:32px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--border)}
+.doc h3{font-size:17px;font-weight:680;margin:24px 0 8px}
+.doc p{margin:0 0 14px}.doc ul,.doc ol{margin:0 0 14px;padding-left:24px}.doc li{margin:4px 0}
+.doc code{background:var(--code);padding:.13em .4em;border-radius:5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.87em}
+.doc pre{background:var(--code);border:1px solid var(--border);border-radius:10px;padding:14px 16px;overflow-x:auto;margin:0 0 16px}
+.doc pre code{background:none;padding:0;font-size:13px}
+.doc blockquote{margin:0 0 16px;padding:2px 0 2px 16px;border-left:3px solid var(--accent);color:var(--muted)}
+.doc table{border-collapse:collapse;width:100%;font-size:14px;margin:0 0 16px}
+.doc th,.doc td{border-bottom:1px solid var(--border);padding:8px 12px;text-align:left}
+.doc img{max-width:100%;border-radius:8px}
+.doc hr{border:none;border-top:1px solid var(--border);margin:26px 0}
+.doc details{border:1px solid var(--border);border-radius:10px;padding:8px 14px;margin:0 0 14px}
+.doc summary{cursor:pointer;font-weight:600;list-style:none}
+.doc summary::-webkit-details-marker{display:none}
+.doc summary::before{content:'▸ ';color:var(--muted)}
+.doc details[open] summary::before{content:'▾ '}
+.vx-columns{display:grid;gap:20px;grid-template-columns:repeat(2,minmax(0,1fr));margin:0 0 16px}
+.vx-columns[data-cols="3"]{grid-template-columns:repeat(3,minmax(0,1fr))}
+@media(max-width:760px){.vx-columns,.vx-columns[data-cols="3"]{grid-template-columns:1fr}}
+.vx-embed{border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:10px;margin:0 0 16px;overflow:hidden;background:var(--panel)}
+.vx-embed-head{display:flex;gap:8px;align-items:center;padding:6px 12px;border-bottom:1px solid var(--border);font-size:11.5px;color:var(--muted)}
+.vx-embed-open{margin-left:auto;font-size:11.5px}
+.vx-embed-body{padding:10px 14px;font-size:.95em}
+.vx-embed-body>*:first-child{margin-top:0}.vx-embed-body>*:last-child{margin-bottom:0}
+.pub-deadlink{color:var(--faint);border-bottom:1px dashed var(--border)}
+.pub-note{color:var(--muted);font-size:13px;font-style:italic;margin:0 0 14px}
+.pub-db{border:1px solid var(--border);border-radius:11px;overflow:hidden;margin:0 0 18px;background:var(--panel)}
+.pub-db-head{padding:9px 13px;border-bottom:1px solid var(--border);font-size:13.5px}
+.pub-db table{margin:0;font-size:13px}
+.pub-db th{font-size:11.5px;color:var(--muted);font-weight:600}
+.pub-pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:550;color:var(--pill,var(--accent));background:color-mix(in srgb,var(--pill,var(--accent)) 15%,transparent)}
+.foot{margin-top:40px;padding-top:18px;border-top:1px solid var(--border);font-size:12px;color:var(--faint)}
+.menu{display:none}
+@media(max-width:880px){.wrap{grid-template-columns:1fr}.side{position:fixed;z-index:20;width:270px;transform:translateX(-102%);transition:transform .2s;box-shadow:var(--shadow)}
+.wrap.open .side{transform:none}.menu{display:inline-flex}.doc{padding:24px 20px 70px}}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap" id="wrap">
+  <aside class="side" id="side">
+    <div class="brand">
+      <span class="mark"><svg viewBox="150 455 930 660"><g fill="#fff" stroke="#fff" stroke-width="24" stroke-linejoin="round" stroke-linecap="round"><path d="M175 482 L388 482 L540 792 L675 843 L675 858 L598 858 L585 1082 L470 1082 Z"/><path d="M802 604 L1042 604 L936 850 L726 850 Z"/></g></svg></span>
+      <span><b>${escHtml(site.title)}</b><span>${site.pages.length} page${site.pages.length === 1 ? '' : 's'}</span></span>
+    </div>
+    <input class="q" id="q" placeholder="Filter pages…">
+    <div class="nav" id="nav"></div>
+  </aside>
+  <div class="main">
+    <div class="top">
+      <button class="tbtn menu" id="menu">☰</button>
+      <span class="crumb"><b id="crumb"></b></span><span class="sp"></span>
+      <button class="tbtn" id="theme">Theme</button>
+    </div>
+    <div class="doc" id="doc"></div>
+  </div>
+</div>
+<script id="site" type="application/json">${json}</script>
+<script>
+(function(){
+  var SITE=JSON.parse(document.getElementById('site').textContent);
+  var nav=document.getElementById('nav'),doc=document.getElementById('doc'),crumb=document.getElementById('crumb');
+  var groups={},order=[];
+  SITE.pages.forEach(function(p){ if(!groups[p.group]){groups[p.group]=[];order.push(p.group);} groups[p.group].push(p); });
+  function drawNav(filter){
+    nav.innerHTML='';
+    order.forEach(function(g){
+      var items=groups[g].filter(function(p){return !filter||p.title.toLowerCase().indexOf(filter)>-1;});
+      if(!items.length)return;
+      if(g){var h=document.createElement('div');h.className='grp';h.textContent=g;nav.appendChild(h);}
+      items.forEach(function(p){
+        var a=document.createElement('a');a.href='#'+p.slug;a.textContent=p.title;a.dataset.slug=p.slug;nav.appendChild(a);
+      });
+    });
+    mark();
+  }
+  function mark(){
+    var cur=(location.hash||'').replace('#','')||SITE.pages[0].slug;
+    [].forEach.call(nav.querySelectorAll('a'),function(a){a.classList.toggle('on',a.dataset.slug===cur);});
+  }
+  function show(){
+    var slug=(location.hash||'').replace('#','')||SITE.pages[0].slug;
+    var p=SITE.pages.filter(function(x){return x.slug===slug;})[0]||SITE.pages[0];
+    // only add a title when the page doesn't already open with its own H1,
+    // otherwise every page renders its name twice
+    var hasH1=/^\s*<h1[\s>]/i.test(p.html);
+    doc.innerHTML=(hasH1?'':'<h1>'+p.title.replace(/&/g,'&amp;').replace(/</g,'&lt;')+'</h1>')+p.html+
+      '<div class="foot">Published from '+SITE.title.replace(/&/g,'&amp;').replace(/</g,'&lt;')+' with Vedrix'+(SITE.date?' · '+SITE.date:'')+'</div>';
+    crumb.textContent=p.title;document.title=p.title+' — '+SITE.title;
+    mark();window.scrollTo(0,0);
+    document.getElementById('wrap').classList.remove('open');
+  }
+  document.getElementById('q').addEventListener('input',function(){drawNav(this.value.trim().toLowerCase());});
+  document.getElementById('menu').addEventListener('click',function(){document.getElementById('wrap').classList.toggle('open');});
+  document.getElementById('theme').addEventListener('click',function(){
+    var el=document.documentElement,cur=el.getAttribute('data-theme');
+    var dark=cur==='dark'||(cur==='auto'&&matchMedia('(prefers-color-scheme:dark)').matches);
+    el.setAttribute('data-theme',dark?'light':'dark');
+  });
+  window.addEventListener('hashchange',show);
+  drawNav('');show();
+})();
+</script>
+</body>
+</html>`;
+}
+
+/* ---------- the command ---------------------------------------------------- */
+
+async function publishSite(rootPath) {
+  const root = rootPath || (folder && folder.root);
+  if (!root) { toast('Open a folder first (⌘⇧O)'); return; }
+  toast('Building site…');
+  try {
+    const tree = TAURI ? await TAURI.core.invoke('list_dir_tree', { path: root })
+                       : (window.__dbMock && window.__dbMock.tree) || [];
+    const pages = pubCollect(tree, [], '');
+    if (!pages.length) { toast('No markdown pages found in this folder'); return; }
+
+    // unique slugs
+    const used = new Set();
+    pages.forEach(p => {
+      let s = pubSlug(p.rel), n = 2;
+      while (used.has(s)) s = pubSlug(p.rel) + '-' + (n++);
+      used.add(s);
+      p.slug = s;
+    });
+
+    // databases that live inside this folder, loaded once
+    const dbs = [];
+    const seen = new Set();
+    for (const p of pages) {
+      const dir = p.path.slice(0, p.path.lastIndexOf('/'));
+      if (seen.has(dir)) continue;
+      seen.add(dir);
+      const schema = await pubReadFile(dbJoin(dir, DB_SCHEMA_FILE));
+      if (!schema) continue;
+      try {
+        const loaded = await dbLoad(dir);
+        await dbLoadRelations(loaded);
+        dbs.push({ folder: dir, name: dir.split(/[/\\]/).pop(), rel: p.group || '', loaded });
+      } catch (_) {}
+    }
+
+    const index = {
+      byTitle: new Map(pages.map(p => [p.title.toLowerCase(), p])),
+      byRel: new Map(pages.map(p => [p.rel.replace(/\.(md|markdown)$/i, '').toLowerCase(), p])),
+      byPath: new Map(pages.map(p => [p.path, p])),
+      dbs,
+    };
+
+    const out = [];
+    for (const p of pages) {
+      out.push({ slug: p.slug, title: p.title, group: p.group, html: await pubRenderPage(p, index, {}) });
+    }
+    const site = {
+      title: root.split(/[/\\]/).filter(Boolean).pop() || 'Vault',
+      date: new Date().toISOString().slice(0, 10),
+      pages: out,
+    };
+    const html = pubSiteHtml(site);
+    const filename = pubSlug(site.title) + '-site.html';
+
+    if (TAURI) {
+      try {
+        const dest = await TAURI.core.invoke('plugin:dialog|save', { options: { defaultPath: filename } });
+        if (!dest) { toast('Publish cancelled'); return; }
+        await TAURI.core.invoke('write_file', { path: dest, contents: html });
+        toast('Published ' + out.length + ' pages → ' + dest.split(/[/\\]/).pop());
+        return dest;
+      } catch (err) {
+        const dest = await TAURI.core.invoke('save_export', { filename, contents: html });
+        toast('Published to ' + dest);
+        return dest;
+      }
+    }
+    window.__lastSite = html;      // browser/test path
+    toast('Built ' + out.length + ' pages');
+    return html;
+  } catch (err) {
+    console.error('publish failed', err);
+    toast('Could not build the site');
+  }
 }
