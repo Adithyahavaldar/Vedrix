@@ -189,6 +189,175 @@ fn list_dir_tree(path: String) -> Result<Vec<DirEntry>, String> {
     Ok(walk_dir(std::path::Path::new(&path), 0))
 }
 
+// --- N6: version history ---------------------------------------------------
+// Two sources, merged in the UI: snapshots we take ourselves on save, and (when
+// the vault is a git repo) the file's real commit history. Snapshots live in
+// .vedrix/history/ inside the vault so they travel with it — and are plain
+// files, so nothing is trapped in a database.
+
+#[derive(serde::Serialize)]
+struct HistoryEntry {
+    ts: u64,
+    size: u64,
+    source: String, // "snapshot" | "git"
+    id: String,     // timestamp (snapshot) or commit hash (git)
+    label: String,  // commit subject, empty for snapshots
+    author: String,
+}
+
+const HISTORY_KEEP: usize = 60;
+
+fn history_dir(root: &str, rel: &str) -> std::path::PathBuf {
+    let key: String = rel
+        .chars()
+        .map(|c| if c == '/' || c == '\\' || c == ':' { '_' } else { c })
+        .collect();
+    std::path::Path::new(root).join(".vedrix").join("history").join(key)
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Write a snapshot unless the newest one is already identical.
+/// Returns the timestamp when a snapshot was actually taken.
+#[tauri::command]
+fn history_snapshot(root: String, rel: String, contents: String) -> Result<Option<u64>, String> {
+    let dir = history_dir(&root, &rel);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let mut stamps: Vec<u64> = std::fs::read_dir(&dir)
+        .map_err(|e| e.to_string())?
+        .flatten()
+        .filter_map(|e| {
+            e.path()
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .and_then(|s| s.parse::<u64>().ok())
+        })
+        .collect();
+    stamps.sort_unstable();
+    if let Some(last) = stamps.last() {
+        if let Ok(prev) = std::fs::read_to_string(dir.join(format!("{}.snap", last))) {
+            if prev == contents {
+                return Ok(None); // nothing changed — don't clutter the timeline
+            }
+        }
+    }
+    let ts = now_secs();
+    std::fs::write(dir.join(format!("{}.snap", ts)), &contents).map_err(|e| e.to_string())?;
+    // prune oldest beyond the cap
+    stamps.push(ts);
+    if stamps.len() > HISTORY_KEEP {
+        for old in &stamps[..stamps.len() - HISTORY_KEEP] {
+            let _ = std::fs::remove_file(dir.join(format!("{}.snap", old)));
+        }
+    }
+    Ok(Some(ts))
+}
+
+#[tauri::command]
+fn history_list(root: String, rel: String) -> Result<Vec<HistoryEntry>, String> {
+    let dir = history_dir(&root, &rel);
+    let Ok(rd) = std::fs::read_dir(&dir) else {
+        return Ok(vec![]);
+    };
+    let mut out: Vec<HistoryEntry> = rd
+        .flatten()
+        .filter_map(|e| {
+            let p = e.path();
+            let ts = p.file_stem()?.to_str()?.parse::<u64>().ok()?;
+            let size = e.metadata().ok().map(|m| m.len()).unwrap_or(0);
+            Some(HistoryEntry {
+                ts,
+                size,
+                source: "snapshot".into(),
+                id: ts.to_string(),
+                label: String::new(),
+                author: String::new(),
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| b.ts.cmp(&a.ts));
+    Ok(out)
+}
+
+#[tauri::command]
+fn history_read(root: String, rel: String, id: String) -> Result<String, String> {
+    let dir = history_dir(&root, &rel);
+    std::fs::read_to_string(dir.join(format!("{}.snap", id))).map_err(|e| e.to_string())
+}
+
+fn git_dir_of(path: &str) -> Option<std::path::PathBuf> {
+    let p = std::path::Path::new(path);
+    let mut cur = if p.is_file() { p.parent()? } else { p };
+    loop {
+        if cur.join(".git").exists() {
+            return Some(cur.to_path_buf());
+        }
+        cur = cur.parent()?;
+    }
+}
+
+/// Real commit history for one file, when the vault happens to be a git repo.
+/// Absent git (or absent repo) this returns an empty list — never an error the
+/// UI has to apologise for.
+#[tauri::command]
+fn git_file_log(path: String) -> Result<Vec<HistoryEntry>, String> {
+    let Some(repo) = git_dir_of(&path) else { return Ok(vec![]) };
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .args(["log", "--follow", "-n", "60", "--format=%H%x1f%ct%x1f%an%x1f%s", "--"])
+        .arg(&path)
+        .output();
+    let Ok(out) = out else { return Ok(vec![]) };
+    if !out.status.success() {
+        return Ok(vec![]);
+    }
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.split('\u{1f}');
+            let hash = parts.next()?.to_string();
+            let ts = parts.next()?.parse::<u64>().ok()?;
+            let author = parts.next().unwrap_or("").to_string();
+            let subject = parts.next().unwrap_or("").to_string();
+            Some(HistoryEntry {
+                ts,
+                size: 0,
+                source: "git".into(),
+                id: hash,
+                label: subject,
+                author,
+            })
+        })
+        .collect())
+}
+
+#[tauri::command]
+fn git_file_show(path: String, hash: String) -> Result<String, String> {
+    let repo = git_dir_of(&path).ok_or("not a git repository")?;
+    let rel = std::path::Path::new(&path)
+        .strip_prefix(&repo)
+        .map_err(|e| e.to_string())?
+        .to_string_lossy()
+        .replace('\\', "/");
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .arg("show")
+        .arg(format!("{}:{}", hash, rel))
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
 // --- Folder-as-database scan (N3) ---
 // One row per .md file directly inside the folder. Only the frontmatter block
 // travels to the frontend — a 200-row database must not ship 200 whole
@@ -427,6 +596,11 @@ pub fn run() {
             write_library,
             list_dir_tree,
             scan_db,
+            history_snapshot,
+            history_list,
+            history_read,
+            git_file_log,
+            git_file_show,
             open_externally,
             ai_fetch,
             diag

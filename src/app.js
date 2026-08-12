@@ -2886,7 +2886,9 @@ function applyAnnotations(t) {
   for (const a of annsFor(t.path)) {
     const range = offsetsToRange(contentEl, a.start, a.end);
     if (!range) continue;
-    const marks = wrapRange(range, 'sutra-hl' + (a.note ? ' has-note' : ''), { hlId: a.id });
+    const cls = 'sutra-hl' + (a.note ? ' has-note' : '')
+      + (a.kind === 'comment' ? ' sutra-comment' : '') + (a.resolved ? ' resolved' : '');
+    const marks = wrapRange(range, cls, { hlId: a.id });
     marks.forEach(m => { m.style.setProperty('--hlc', HL_COLORS[a.color] || HL_COLORS.yellow); });
   }
 }
@@ -2998,6 +3000,7 @@ function wireAnnotations() {
     const color = b.dataset.color;
     if (color) { if (_hlEdit) recolorHighlight(_hlEdit, color); else { const a = createHighlight(color); _hlEdit = a && a.id; } }
     else if (b.dataset.act === 'note') { const id = _hlEdit || (createHighlight('yellow') || {}).id; if (id) openNoteEditor(id); return; }
+    else if (b.dataset.act === 'comment') { openCommentComposer(); return; }
     else if (b.dataset.act === 'remove' && _hlEdit) { removeHighlight(_hlEdit); return; }
     hideHlPop();
   });
@@ -3011,9 +3014,10 @@ function renderNotesPane() {
   const t = activeTab();
   const list = t ? annsFor(t.path) : [];
   host.innerHTML = '';
-  if (!list.length) { host.innerHTML = '<div class="notes-empty">No highlights yet. Select text in the document to highlight it.</div>'; return; }
+  if (!list.length) { host.innerHTML = '<div class="notes-empty">No highlights or comments yet. Select text in the document to highlight or comment on it.</div>'; return; }
   list.sort((a, b) => a.start - b.start);
   for (const a of list) {
+    if (a.kind === 'comment') { host.appendChild(renderCommentCard(a)); continue; }
     const row = document.createElement('div'); row.className = 'note-row';
     row.innerHTML = `<span class="note-dot" style="background:${HL_COLORS[a.color] || HL_COLORS.yellow}"></span>`
       + `<div class="note-body"><div class="note-quote"></div>${a.note ? '<div class="note-text"></div>' : ''}</div>`
@@ -3056,6 +3060,7 @@ function cmdActions() {
       id: 'tpl-' + tpl.rel, label: 'New page from template: ' + tpl.title, hint: '', icon: 'doc',
       run: () => { closeCmd(); newFromTemplate(tpl); },
     }));
+    list.push({ id: 'history', label: 'Version history…', hint: '', icon: 'clock', run: () => { closeCmd(); openHistory(); } });
     list.push({ id: 'publish', label: 'Publish this folder as a site…', hint: '', icon: 'doc', run: () => { closeCmd(); publishSite(folder.root); } });
     list.push({ id: 'open-db', label: 'Open this folder as a database', hint: '', icon: 'doc', run: () => { closeCmd(); createDatabaseHere(folder.root); } });
     list.push({ id: 'new-db', label: 'New database here', hint: '', icon: 'doc', run: () => { closeCmd(); createDatabaseHere(folder.root); } });
@@ -3950,6 +3955,7 @@ async function saveEditor(t) {
       t.mtime = (await t.handle.getFile()).lastModified;
     } else return;
     setDirty(t, false);
+    histMaybeSnapshot(t);          // N6: rate-limited version snapshot
   } catch (err) {
     console.error('save failed', err);
   }
@@ -5962,6 +5968,7 @@ function wireGlobal() {
   wireCmd();
   wireAnnotations();
   wireDb();
+  wireComments();
   wireSelMenu();
   wireEditorToolbar();
   wireInspector();
@@ -8358,4 +8365,391 @@ async function publishSite(rootPath) {
     console.error('publish failed', err);
     toast('Could not build the site');
   }
+}
+
+/* ==========================================================================
+   N6 — History & comments
+
+   History has two sources, merged into one timeline: snapshots Vedrix takes on
+   save (plain files in .vedrix/history/, so they travel with the vault), and —
+   when the folder happens to be a git repo — the file's real commit history.
+   Neither is a database: delete .vedrix/ and you lose the timeline, never a
+   document.
+
+   Comments extend the existing annotation sidecar rather than inventing a
+   second store: a comment is an annotation carrying a thread.
+   ========================================================================== */
+
+/* ---------- line diff (LCS) ---------------------------------------------- */
+
+// Classic LCS table. Documents are small enough that O(n·m) is fine, and a
+// real diff beats "the file changed" for deciding whether to restore.
+function diffLines(aText, bText) {
+  const a = String(aText || '').replace(/\r\n?/g, '\n').split('\n');
+  const b = String(bText || '').replace(/\r\n?/g, '\n').split('\n');
+  // Trim the common head and tail first. A typical edit touches a few lines in
+  // the middle, so this usually shrinks an O(n·m) problem to almost nothing and
+  // keeps big documents exact instead of falling back to a summary.
+  let head = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) head++;
+  let tail = 0;
+  while (tail < a.length - head && tail < b.length - head &&
+         a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
+  const aMid = a.slice(head, a.length - tail);
+  const bMid = b.slice(head, b.length - tail);
+  const prefix = a.slice(0, head).map(text => ({ t: ' ', text }));
+  const suffix = a.slice(a.length - tail).map(text => ({ t: ' ', text }));
+
+  const n = aMid.length, m = bMid.length;
+  // guard: a pathological rewrite still must not hang the UI
+  if (n * m > 4_000_000) {
+    return prefix.concat(
+      [{ t: '-', text: `(${n} changed lines)` }, { t: '+', text: `(${m} changed lines)` }], suffix);
+  }
+  const lcs = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      lcs[i][j] = aMid[i] === bMid[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+    }
+  }
+  const out = prefix.slice();
+  let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (aMid[i] === bMid[j]) { out.push({ t: ' ', text: aMid[i] }); i++; j++; }
+    else if (lcs[i + 1][j] >= lcs[i][j + 1]) { out.push({ t: '-', text: aMid[i] }); i++; }
+    else { out.push({ t: '+', text: bMid[j] }); j++; }
+  }
+  while (i < n) out.push({ t: '-', text: aMid[i++] });
+  while (j < m) out.push({ t: '+', text: bMid[j++] });
+  return out.concat(suffix);
+}
+
+// Collapse long unchanged stretches, the way a diff viewer should.
+function diffHunks(rows, context = 3) {
+  const keep = new Array(rows.length).fill(false);
+  rows.forEach((r, i) => {
+    if (r.t === ' ') return;
+    for (let k = Math.max(0, i - context); k <= Math.min(rows.length - 1, i + context); k++) keep[k] = true;
+  });
+  const out = [];
+  let skipped = 0;
+  rows.forEach((r, i) => {
+    if (keep[i]) {
+      if (skipped) { out.push({ t: '@', text: `… ${skipped} unchanged line${skipped === 1 ? '' : 's'}` }); skipped = 0; }
+      out.push(r);
+    } else skipped++;
+  });
+  if (skipped) out.push({ t: '@', text: `… ${skipped} unchanged line${skipped === 1 ? '' : 's'}` });
+  return out;
+}
+
+const diffStat = (rows) => ({
+  added: rows.filter(r => r.t === '+').length,
+  removed: rows.filter(r => r.t === '-').length,
+});
+
+/* ---------- snapshots ----------------------------------------------------- */
+
+const histState = { open: false, entries: [], sel: null, oldText: '', tab: null };
+let _histLast = 0;
+
+function histRel(t) {
+  if (!folder || !t || !t.path) return t && t.name ? t.name : '';
+  const root = folder.root.replace(/[/\\]+$/, '');
+  return t.path.startsWith(root) ? t.path.slice(root.length + 1) : t.name;
+}
+
+// Called after a successful save. Rate-limited: a snapshot every keystroke
+// would bury the real versions in noise.
+async function histMaybeSnapshot(t) {
+  if (!TAURI || !folder || !t || !t.path) return;
+  const now = Date.now();
+  if (now - _histLast < 90_000) return;         // at most one snapshot / 90s
+  _histLast = now;
+  try {
+    await TAURI.core.invoke('history_snapshot', { root: folder.root, rel: histRel(t), contents: t.text || '' });
+  } catch (err) { /* history must never break saving */ }
+}
+
+async function histLoad(t) {
+  const rel = histRel(t);
+  let snaps = [], gits = [];
+  try { snaps = await TAURI.core.invoke('history_list', { root: folder.root, rel }); } catch (_) {}
+  try { gits = await TAURI.core.invoke('git_file_log', { path: t.path }); } catch (_) {}
+  return [...snaps, ...gits].sort((a, b) => b.ts - a.ts);
+}
+
+async function histReadVersion(t, entry) {
+  if (entry.source === 'git') return TAURI.core.invoke('git_file_show', { path: t.path, hash: entry.id });
+  return TAURI.core.invoke('history_read', { root: folder.root, rel: histRel(t), id: entry.id });
+}
+
+/* ---------- history UI ----------------------------------------------------- */
+
+async function openHistory() {
+  const t = activeTab();
+  if (!t) return;
+  if (!TAURI || !t.path) { toast('Save this file first — history tracks files on disk'); return; }
+  if (!folder) { toast('Open the folder (⌘⇧O) to keep version history'); return; }
+  const ov = $('hist-overlay');
+  ov.hidden = false;
+  histState.open = true;
+  histState.tab = t;
+  $('hist-file').textContent = t.name;
+  $('hist-list').innerHTML = '<div class="hist-empty">Loading…</div>';
+  $('hist-diff').innerHTML = '';
+  // take one now so "current" is always comparable
+  try { await TAURI.core.invoke('history_snapshot', { root: folder.root, rel: histRel(t), contents: t.text || '' }); } catch (_) {}
+  histState.entries = await histLoad(t);
+  renderHistList();
+  if (histState.entries.length) selectVersion(0);
+  else $('hist-diff').innerHTML = '<div class="hist-empty">No earlier versions yet.<br><span>Vedrix snapshots this file as you edit it.</span></div>';
+}
+
+function closeHistory() { $('hist-overlay').hidden = true; histState.open = false; }
+
+function histWhen(ts) {
+  const d = new Date(ts * 1000);
+  const diff = (Date.now() / 1000) - ts;
+  if (diff < 60) return 'just now';
+  if (diff < 3600) return Math.floor(diff / 60) + ' min ago';
+  if (diff < 86400) return Math.floor(diff / 3600) + ' h ago';
+  if (diff < 7 * 86400) return Math.floor(diff / 86400) + ' d ago';
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function renderHistList() {
+  const list = $('hist-list');
+  list.innerHTML = '';
+  if (!histState.entries.length) { list.innerHTML = '<div class="hist-empty">No versions yet</div>'; return; }
+  histState.entries.forEach((e, i) => {
+    const row = document.createElement('button');
+    row.className = 'hist-item' + (histState.sel === i ? ' on' : '');
+    const top = document.createElement('div');
+    top.className = 'hist-when';
+    top.textContent = histWhen(e.ts);
+    const tag = document.createElement('span');
+    tag.className = 'hist-src ' + e.source;
+    tag.textContent = e.source === 'git' ? 'commit' : 'snapshot';
+    top.appendChild(tag);
+    row.appendChild(top);
+    const sub = document.createElement('div');
+    sub.className = 'hist-sub';
+    sub.textContent = e.label || new Date(e.ts * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    row.appendChild(sub);
+    if (e.author) {
+      const au = document.createElement('div');
+      au.className = 'hist-author';
+      au.textContent = e.author;
+      row.appendChild(au);
+    }
+    row.addEventListener('click', () => selectVersion(i));
+    list.appendChild(row);
+  });
+}
+
+async function selectVersion(i) {
+  histState.sel = i;
+  renderHistList();
+  const t = histState.tab;
+  const e = histState.entries[i];
+  const diffEl = $('hist-diff');
+  diffEl.innerHTML = '<div class="hist-empty">Loading…</div>';
+  let oldText = '';
+  try { oldText = await histReadVersion(t, e); }
+  catch (err) { diffEl.innerHTML = '<div class="hist-empty">Could not read that version.</div>'; return; }
+  histState.oldText = oldText;
+  const rows = diffHunks(diffLines(oldText, t.text || ''));
+  const stat = diffStat(diffLines(oldText, t.text || ''));
+
+  diffEl.innerHTML = '';
+  const head = document.createElement('div');
+  head.className = 'hist-diffhead';
+  head.innerHTML = `<b>${histWhen(e.ts)}</b> <span class="hist-vs">compared with now</span>`;
+  const counts = document.createElement('span');
+  counts.className = 'hist-counts';
+  counts.innerHTML = `<i class="add">+${stat.added}</i><i class="del">−${stat.removed}</i>`;
+  head.appendChild(counts);
+  const restore = document.createElement('button');
+  restore.className = 'hist-restore';
+  restore.textContent = 'Restore this version';
+  restore.addEventListener('click', () => restoreVersion(i));
+  head.appendChild(restore);
+  diffEl.appendChild(head);
+
+  if (!stat.added && !stat.removed) {
+    diffEl.appendChild(Object.assign(document.createElement('div'), { className: 'hist-empty', textContent: 'Identical to the current file.' }));
+    return;
+  }
+  const pre = document.createElement('div');
+  pre.className = 'hist-diffbody';
+  rows.forEach(r => {
+    const line = document.createElement('div');
+    line.className = 'hist-line ' + (r.t === '+' ? 'add' : r.t === '-' ? 'del' : r.t === '@' ? 'skip' : 'same');
+    line.textContent = (r.t === '@' ? '' : r.t + ' ') + r.text;
+    pre.appendChild(line);
+  });
+  diffEl.appendChild(pre);
+}
+
+async function restoreVersion(i) {
+  const t = histState.tab;
+  const e = histState.entries[i];
+  const text = histState.oldText;
+  // snapshot what's on screen first, so restoring is itself undoable
+  try { await TAURI.core.invoke('history_snapshot', { root: folder.root, rel: histRel(t), contents: t.text || '' }); } catch (_) {}
+  try {
+    t.mtime = await TAURI.core.invoke('write_file', { path: t.path, contents: text });
+    t.text = text;
+    t.html = await buildHtml(t.kind, { text });
+    if (activeTab() === t) renderActive();
+    setDirty(t, false);
+    _histLast = 0;
+    histState.entries = await histLoad(t);
+    renderHistList();
+    toast('Restored the version from ' + histWhen(e.ts));
+  } catch (err) {
+    console.error(err);
+    toast('Could not restore that version');
+  }
+}
+
+/* ---------- comments ------------------------------------------------------- */
+
+// A comment is an annotation with a thread. Same sidecar, same anchoring —
+// no second store to keep in sync.
+function addComment(text) {
+  const t = activeTab();
+  if (!t || !_hlSel) return null;
+  const { start, end } = rangeToOffsets(contentEl, _hlSel);
+  if (end <= start) return null;
+  const who = (settings.profileName || '').trim() || 'Me';
+  const a = {
+    id: 'c' + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36),
+    kind: 'comment', color: 'blue', start, end,
+    quote: _hlSel.toString().slice(0, 400),
+    thread: [{ who, text: String(text || '').trim(), ts: Date.now() }],
+    resolved: false, note: '', ts: Date.now(),
+  };
+  setAnns(t.path, annsFor(t.path).concat(a));
+  const range = offsetsToRange(contentEl, a.start, a.end);
+  if (range) wrapRange(range, 'sutra-hl', { hlId: a.id }).forEach(m => { m.classList.add('sutra-comment'); });
+  getSelection().removeAllRanges();
+  sideMode = 'notes'; sidebarCollapsed = false; updateSidebar();
+  return a;
+}
+
+function replyToComment(id, text) {
+  const t = activeTab();
+  const list = annsFor(t.path);
+  const a = list.find(x => x.id === id);
+  if (!a || !String(text || '').trim()) return;
+  a.thread = a.thread || [];
+  a.thread.push({ who: (settings.profileName || '').trim() || 'Me', text: String(text).trim(), ts: Date.now() });
+  setAnns(t.path, list);
+  renderNotesPane();
+}
+
+function toggleResolved(id) {
+  const t = activeTab();
+  const list = annsFor(t.path);
+  const a = list.find(x => x.id === id);
+  if (!a) return;
+  a.resolved = !a.resolved;
+  setAnns(t.path, list);
+  contentEl.querySelectorAll(`.sutra-hl[data-hl-id="${id}"]`).forEach(m => m.classList.toggle('resolved', !!a.resolved));
+  renderNotesPane();
+}
+
+function commentWhen(ts) {
+  const d = Math.floor((Date.now() - ts) / 1000);
+  if (d < 60) return 'just now';
+  if (d < 3600) return Math.floor(d / 60) + 'm';
+  if (d < 86400) return Math.floor(d / 3600) + 'h';
+  return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+// Rendered into the Notes pane alongside highlights.
+function renderCommentCard(a) {
+  const card = document.createElement('div');
+  card.className = 'note-card comment-card' + (a.resolved ? ' resolved' : '');
+  const quote = document.createElement('div');
+  quote.className = 'note-quote';
+  quote.textContent = a.quote;
+  quote.addEventListener('click', () => scrollToHighlight(a.id));
+  card.appendChild(quote);
+
+  (a.thread || []).forEach(msg => {
+    const m = document.createElement('div');
+    m.className = 'cmt-msg';
+    const who = document.createElement('b');
+    who.textContent = msg.who;
+    const when = document.createElement('i');
+    when.textContent = commentWhen(msg.ts);
+    const body = document.createElement('div');
+    body.className = 'cmt-text';
+    body.textContent = msg.text;
+    m.append(who, when, body);
+    card.appendChild(m);
+  });
+
+  const row = document.createElement('div');
+  row.className = 'cmt-actions';
+  const reply = document.createElement('input');
+  reply.className = 'cmt-reply';
+  reply.placeholder = a.resolved ? 'Reopen to reply…' : 'Reply…';
+  reply.disabled = !!a.resolved;
+  reply.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && reply.value.trim()) { e.preventDefault(); replyToComment(a.id, reply.value); }
+  });
+  row.appendChild(reply);
+  const res = document.createElement('button');
+  res.className = 'cmt-resolve';
+  res.textContent = a.resolved ? 'Reopen' : 'Resolve';
+  res.addEventListener('click', () => toggleResolved(a.id));
+  row.appendChild(res);
+  const del = document.createElement('button');
+  del.className = 'cmt-del';
+  del.textContent = '✕';
+  del.title = 'Delete this comment';
+  del.addEventListener('click', () => removeHighlight(a.id));
+  row.appendChild(del);
+  card.appendChild(row);
+  return card;
+}
+
+function openCommentComposer() {
+  const pop = $('cmt-pop');
+  if (!pop || !_hlSel) return;
+  const r = _hlSel.getBoundingClientRect();
+  pop.hidden = false;
+  pop.style.left = Math.max(10, Math.min(window.innerWidth - 300, r.left)) + 'px';
+  pop.style.top = (r.bottom + 8) + 'px';
+  const input = $('cmt-input');
+  input.value = '';
+  input.focus();
+}
+
+function wireComments() {
+  const send = () => {
+    const input = $('cmt-input');
+    if (!input.value.trim()) return;
+    addComment(input.value);
+    $('cmt-pop').hidden = true;
+    hideHlPop();
+  };
+  $('cmt-send').addEventListener('click', send);
+  $('cmt-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey || !e.shiftKey)) { e.preventDefault(); send(); }
+    else if (e.key === 'Escape') { $('cmt-pop').hidden = true; }
+  });
+  document.addEventListener('mousedown', (e) => {
+    const pop = $('cmt-pop');
+    if (pop && !pop.hidden && !pop.contains(e.target)) pop.hidden = true;
+  });
+  $('hist-close').addEventListener('click', closeHistory);
+  $('hist-overlay').addEventListener('mousedown', (e) => { if (e.target === $('hist-overlay')) closeHistory(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && histState.open) { e.preventDefault(); closeHistory(); }
+  });
 }
