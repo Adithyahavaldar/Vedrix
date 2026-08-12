@@ -189,6 +189,83 @@ fn list_dir_tree(path: String) -> Result<Vec<DirEntry>, String> {
     Ok(walk_dir(std::path::Path::new(&path), 0))
 }
 
+// --- Folder-as-database scan (N3) ---
+// One row per .md file directly inside the folder. Only the frontmatter block
+// travels to the frontend — a 200-row database must not ship 200 whole
+// documents across the IPC boundary just to draw a table.
+#[derive(serde::Serialize)]
+struct DbRow {
+    path: String,
+    name: String,
+    mtime: u64,
+    fm: String, // raw frontmatter block, "" when the file has none
+}
+
+fn head_frontmatter(text: &str) -> String {
+    let t = text.strip_prefix('\u{feff}').unwrap_or(text);
+    if !(t.starts_with("---\n") || t.starts_with("---\r\n")) {
+        return String::new();
+    }
+    let after = t.find('\n').map(|i| i + 1).unwrap_or(0);
+    let mut idx = after;
+    for line in t[after..].split_inclusive('\n') {
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if trimmed == "---" || trimmed == "..." {
+            return t[..idx + line.len()].to_string();
+        }
+        idx += line.len();
+    }
+    String::new() // unterminated block — treat as no frontmatter
+}
+
+#[tauri::command]
+fn scan_db(folder: String) -> Result<Vec<DbRow>, String> {
+    let dir = std::path::Path::new(&folder);
+    let rd = std::fs::read_dir(dir).map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for entry in rd.flatten() {
+        let p = entry.path();
+        if !p.is_file() {
+            continue;
+        }
+        let ext = p
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if ext != "md" {
+            continue;
+        }
+        let name = match p.file_name().and_then(|s| s.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+        // '_' is reserved for the schema file and templates; '.' for hidden
+        if name.starts_with('_') || name.starts_with('.') {
+            continue;
+        }
+        let meta = entry.metadata().map_err(|e| e.to_string())?;
+        if meta.len() > 4_000_000 {
+            continue;
+        }
+        let content = std::fs::read_to_string(&p).unwrap_or_default();
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        out.push(DbRow {
+            path: p.to_string_lossy().to_string(),
+            name,
+            mtime,
+            fm: head_frontmatter(&content),
+        });
+    }
+    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    Ok(out)
+}
+
 // --- Vault-wide content search (native = fast, non-blocking) ---
 #[derive(serde::Serialize)]
 struct SearchHit {
@@ -349,6 +426,7 @@ pub fn run() {
             read_library,
             write_library,
             list_dir_tree,
+            scan_db,
             open_externally,
             ai_fetch,
             diag

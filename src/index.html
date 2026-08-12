@@ -12,8 +12,8 @@
 <link rel="stylesheet" href="vendor/fonts/fonts.css">
 <link rel="stylesheet" href="vendor/katex.min.css">
 <link rel="stylesheet" href="vendor/codemirror.css">
-<link rel="stylesheet" href="app.css?v=169">
-<link rel="stylesheet" href="themes.css?v=169">
+<link rel="stylesheet" href="app.css?v=170">
+<link rel="stylesheet" href="themes.css?v=170">
 </head>
 <body>
   <div id="topbar" data-tauri-drag-region>
@@ -353,6 +353,7 @@
     </div>
 
     <div id="canvasview" hidden></div>
+    <div id="dbview" hidden></div>
 
     <div id="unsupported" hidden>
       <div class="big">🗂️</div>
@@ -674,6 +675,6 @@
   window.pdfjsLib = pdfjsLib;
   window.dispatchEvent(new Event('pdfjs-ready'));
 </script>
-<script src="app.js?v=169"></script>
+<script src="app.js?v=170"></script>
 </body>
 </html>

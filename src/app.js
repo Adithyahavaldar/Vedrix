@@ -373,9 +373,10 @@ function showPane(pane) {
   $('mapview').hidden = pane !== 'map';
   $('graphview').hidden = pane !== 'graph';
   $('canvasview').hidden = pane !== 'canvas';
+  $('dbview').hidden = pane !== 'db';
   $('home').hidden = pane !== 'home';
-  // the canvas owns its full pane — hide the doc sidebar (no TOC/outline for it)
-  $('sidebar').style.display = (pane === 'home' || pane === 'canvas') ? 'none' : '';
+  // canvas and database own their full pane — no TOC/outline applies to them
+  $('sidebar').style.display = (pane === 'home' || pane === 'canvas' || pane === 'db') ? 'none' : '';
 }
 
 function slugify(text, used) {
@@ -1068,6 +1069,13 @@ function renderActive() {
     return;
   }
 
+  if (t.kind === 'db') {
+    clearToc();
+    applyRichState(null);
+    renderDb(t);
+    return;
+  }
+
   if (t.kind === 'html') {
     applyRichState(null);
     renderHtmlDoc(t);
@@ -1363,7 +1371,10 @@ function fmSet(text, key, value) {
   const nl = /\r\n/.test(text || '') ? '\r\n' : '\n';
   if (!fm) {
     if (value == null) return text;
-    return '---' + nl + key + ': ' + fmSerializeValue(value) + nl + '---' + nl + (body || '');
+    // keep a blank line between the block and the body — otherwise a file that
+    // gains its first property reads as "---# Heading"
+    const gap = body && !body.startsWith('\n') ? nl : '';
+    return '---' + nl + key + ': ' + fmSerializeValue(value) + nl + '---' + nl + gap + (body || '');
   }
   const lines = fm.split(/\r?\n/);
   const entry = parseFm(text).find(e => e.key === key);
@@ -3029,6 +3040,10 @@ function cmdActions() {
   if (t && t.kind !== 'unsupported') list.push({ id: 'map', label: 'Open mind map', hint: '⌘M', icon: 'map', run: () => { closeCmd(); toggleMap(); } });
   list.push({ id: 'ai', label: 'Open AI assistant', hint: '⌘J', icon: 'ai', filled: true, run: () => { closeCmd(); if ($('ai-panel').hidden) toggleAiPanel(); } });
   if (folder) list.push({ id: 'jump', label: 'Jump to a page', hint: '⌘P', icon: 'doc', run: () => { closeCmd(); setTimeout(openPageJump, 0); } });
+  if (folder) {
+    list.push({ id: 'open-db', label: 'Open this folder as a database', hint: '', icon: 'doc', run: () => { closeCmd(); createDatabaseHere(folder.root); } });
+    list.push({ id: 'new-db', label: 'New database here', hint: '', icon: 'doc', run: () => { closeCmd(); createDatabaseHere(folder.root); } });
+  }
   if (t && t.kind === 'md') {
     list.push({ id: 'add-prop', label: 'Add a page property', hint: '', icon: 'doc', run: () => { closeCmd(); setTimeout(() => addProp(activeTab()), 30); } });
     list.push({ id: 'show-links', label: 'Show links & backlinks', hint: '', icon: 'find', run: () => { closeCmd(); sideMode = 'links'; sidebarCollapsed = false; updateSidebar(); } });
@@ -5913,6 +5928,7 @@ function wireGlobal() {
   wireFind();
   wireCmd();
   wireAnnotations();
+  wireDb();
   wireSelMenu();
   wireEditorToolbar();
   wireInspector();
@@ -6072,3 +6088,885 @@ async function boot() {
 }
 
 boot();
+
+/* ==========================================================================
+   N3 — Databases v1  (folder-as-database)
+
+   A database is a FOLDER. Each .md file in it is a row; its frontmatter holds
+   the properties (N1 already owns that read/write path). A `_vedrix.db.yaml`
+   file next to the rows declares the schema and saved views.
+
+   The schema file never owns content: delete it and you lose your *views*,
+   never your notes. Every edit here ends as a surgical fmSet() on one file.
+   ========================================================================== */
+
+const DB_SCHEMA_FILE = '_vedrix.db.yaml';
+const DB_TYPES = ['text', 'number', 'select', 'multi_select', 'date', 'checkbox', 'url', 'relation'];
+const DB_SELECT_COLORS = ['#2f6bff', '#16a34a', '#d97706', '#dc2626', '#7c3aed', '#0891b2', '#db2777', '#65758b'];
+
+let db = null;   // { folder, schema, rows, viewIdx, search }
+
+/* ---------- YAML-lite (the subset the schema file is allowed to use) ------ */
+
+function ylScalar(s) {
+  const v = String(s == null ? '' : s).trim();
+  if (!v) return '';
+  if ((v[0] === '"' && v.endsWith('"') && v.length > 1)) { try { return JSON.parse(v); } catch (_) { return v.slice(1, -1); } }
+  if (v[0] === "'" && v.endsWith("'") && v.length > 1) return v.slice(1, -1);
+  if (v === 'true') return true;
+  if (v === 'false') return false;
+  if (v === 'null' || v === '~') return null;
+  if (/^-?\d+(\.\d+)?$/.test(v)) return Number(v);
+  return v;
+}
+
+// {a: b, c: [d, e]} / [a, b] — quote-aware, so values may contain , { } [ ]
+function ylFlow(src) {
+  let i = 0;
+  const s = String(src);
+  const skip = () => { while (i < s.length && /\s/.test(s[i])) i++; };
+  function value() {
+    skip();
+    if (s[i] === '{') return map();
+    if (s[i] === '[') return list();
+    const start = i;
+    let q = null;
+    while (i < s.length) {
+      const c = s[i];
+      if (q) { if (c === q) q = null; i++; continue; }
+      if (c === '"' || c === "'") { q = c; i++; continue; }
+      if (c === ',' || c === '}' || c === ']') break;
+      i++;
+    }
+    return ylScalar(s.slice(start, i));
+  }
+  function map() {
+    const o = {}; i++;
+    for (;;) {
+      skip();
+      if (i >= s.length || s[i] === '}') { i++; break; }
+      const ks = i;
+      let q = null;
+      while (i < s.length) {
+        const c = s[i];
+        if (q) { if (c === q) q = null; i++; continue; }
+        if (c === '"' || c === "'") { q = c; i++; continue; }
+        if (c === ':' || c === '}') break;
+        i++;
+      }
+      const key = String(ylScalar(s.slice(ks, i)));
+      if (s[i] === ':') i++;
+      o[key] = value();
+      skip();
+      if (s[i] === ',') { i++; continue; }
+      if (s[i] === '}') { i++; break; }
+      if (i >= s.length) break;
+    }
+    return o;
+  }
+  function list() {
+    const a = []; i++;
+    for (;;) {
+      skip();
+      if (i >= s.length || s[i] === ']') { i++; break; }
+      a.push(value());
+      skip();
+      if (s[i] === ',') { i++; continue; }
+      if (s[i] === ']') { i++; break; }
+      if (i >= s.length) break;
+    }
+    return a;
+  }
+  return value();
+}
+
+function parseYamlLite(text) {
+  const raw = String(text || '').replace(/\r\n?/g, '\n').split('\n');
+  const lines = raw.filter(l => l.trim() && !/^\s*#/.test(l) && l.trim() !== '---' && l.trim() !== '...');
+  const ind = (l) => (l.match(/^ */) || [''])[0].length;
+  let i = 0;
+  function block(base) {
+    const isList = /^\s*-\s/.test(lines[i] || '');
+    const out = isList ? [] : {};
+    while (i < lines.length) {
+      const line = lines[i];
+      const at = ind(line);
+      if (at < base) break;
+      if (at > base) { i++; continue; }        // defensive: skip stray deeper line
+      const t = line.trim();
+      if (t.startsWith('- ')) {
+        if (!Array.isArray(out)) break;
+        const rest = t.slice(2).trim();
+        if (rest.startsWith('{') || rest.startsWith('[')) { out.push(ylFlow(rest)); i++; continue; }
+        const m = rest.match(/^([^:]+):\s*(.*)$/);
+        if (m) {                                  // "- name: X" + deeper sibling keys
+          const obj = {};
+          const v = m[2].trim();
+          obj[m[1].trim()] = (v.startsWith('{') || v.startsWith('[')) ? ylFlow(v) : ylScalar(v);
+          i++;
+          while (i < lines.length && ind(lines[i]) > at && !lines[i].trim().startsWith('- ')) {
+            const cm = lines[i].trim().match(/^([^:]+):\s*(.*)$/);
+            if (!cm) { i++; continue; }
+            const cv = cm[2].trim();
+            if (!cv) { const key = cm[1].trim(); i++; obj[key] = (i < lines.length && ind(lines[i]) > at) ? block(ind(lines[i])) : null; }
+            else { obj[cm[1].trim()] = (cv.startsWith('{') || cv.startsWith('[')) ? ylFlow(cv) : ylScalar(cv); i++; }
+          }
+          out.push(obj);
+          continue;
+        }
+        out.push(ylScalar(rest)); i++; continue;
+      }
+      const m = t.match(/^([^:]+):\s*(.*)$/);
+      if (!m) { i++; continue; }
+      const key = m[1].trim(), rest = m[2].trim();
+      if (!rest) {
+        i++;
+        out[key] = (i < lines.length && ind(lines[i]) > at) ? block(ind(lines[i])) : null;
+      } else {
+        out[key] = (rest.startsWith('{') || rest.startsWith('[')) ? ylFlow(rest) : ylScalar(rest);
+        i++;
+      }
+    }
+    return out;
+  }
+  return block(ind(lines[0] || ''));
+}
+
+function ylDumpScalar(v) {
+  if (v == null) return '';
+  if (typeof v === 'boolean' || typeof v === 'number') return String(v);
+  const s = String(v);
+  return /^[\s]|[\s]$|[:,{}[\]#]|^$/.test(s) ? JSON.stringify(s) : s;
+}
+
+function ylDumpFlow(o) {
+  if (Array.isArray(o)) return '[' + o.map(ylDumpFlow).join(', ') + ']';
+  if (o && typeof o === 'object') {
+    return '{ ' + Object.keys(o).filter(k => o[k] != null && o[k] !== '')
+      .map(k => k + ': ' + ylDumpFlow(o[k])).join(', ') + ' }';
+  }
+  return ylDumpScalar(o);
+}
+
+// Canonical schema file. Deliberately flow-style for properties/views so the
+// file stays short and round-trips through parseYamlLite exactly.
+function dumpSchema(schema) {
+  const out = ['# Vedrix database — this file declares the schema and saved views.',
+               '# Your notes live in the .md files next to it; deleting this loses only the views.',
+               'name: ' + ylDumpScalar(schema.name || 'Database')];
+  out.push('properties:');
+  const props = schema.properties || {};
+  Object.keys(props).forEach(k => out.push('  ' + k + ': ' + ylDumpFlow(props[k])));
+  out.push('views:');
+  (schema.views || []).forEach(v => out.push('  - ' + ylDumpFlow(v)));
+  return out.join('\n') + '\n';
+}
+
+function dbDefaultSchema(name) {
+  return {
+    name: name || 'Database',
+    properties: {
+      Status: { type: 'select', options: ['Backlog', 'In progress', 'Done'] },
+      Due: { type: 'date' },
+    },
+    views: [
+      { name: 'Table', type: 'table' },
+      { name: 'Board', type: 'board', group: 'Status' },
+    ],
+  };
+}
+
+/* ---------- storage layer (Tauri, with an in-memory mock for tests) ------- */
+
+const dbFs = {
+  async scan(folder) {
+    if (TAURI) return TAURI.core.invoke('scan_db', { folder });
+    return (window.__dbMock && window.__dbMock.scan(folder)) || [];
+  },
+  async read(path) {
+    if (TAURI) { try { return (await TAURI.core.invoke('read_md_file', { path })).text; } catch (_) { return ''; } }
+    return (window.__dbMock && window.__dbMock.files[path]) || '';
+  },
+  async write(path, contents) {
+    if (TAURI) return TAURI.core.invoke('write_file', { path, contents });
+    if (window.__dbMock) window.__dbMock.files[path] = contents;
+  },
+};
+
+const dbJoin = (folder, name) => folder.replace(/[/\\]+$/, '') + '/' + name;
+
+/* ---------- load ---------------------------------------------------------- */
+
+// frontmatter block (raw) → { key: value } using the N1 parser
+function dbProps(fmText) {
+  const out = {};
+  parseFm(fmText || '').forEach(e => { out[e.key] = e.list && (e.inline || e.list.length) ? e.list : e.value; });
+  return out;
+}
+
+async function dbLoad(folder) {
+  const schemaText = await dbFs.read(dbJoin(folder, DB_SCHEMA_FILE));
+  let schema = schemaText ? parseYamlLite(schemaText) : null;
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) schema = dbDefaultSchema(folder.split(/[/\\]/).pop());
+  schema.properties = schema.properties || {};
+  schema.views = (schema.views || []).filter(v => v && v.name);
+  if (!schema.views.length) schema.views = [{ name: 'Table', type: 'table' }];
+  const scanned = await dbFs.scan(folder);
+  const rows = scanned.map(r => ({ path: r.path, name: r.name, title: r.name.replace(/\.md$/i, ''), mtime: r.mtime, props: dbProps(r.fm) }));
+  // any frontmatter key that isn't declared yet becomes a text property, so a
+  // folder of existing notes shows its real data instead of empty columns
+  rows.forEach(r => Object.keys(r.props).forEach(k => {
+    if (!schema.properties[k]) schema.properties[k] = { type: Array.isArray(r.props[k]) ? 'multi_select' : 'text' };
+  }));
+  return { folder, schema, rows, viewIdx: 0, search: '' };
+}
+
+async function dbSaveSchema() {
+  if (!db) return;
+  await dbFs.write(dbJoin(db.folder, DB_SCHEMA_FILE), dumpSchema(db.schema));
+}
+
+/* ---------- filter / sort / group ---------------------------------------- */
+
+function dbCmp(a, b) {
+  const na = Number(a), nb = Number(b);
+  if (a !== '' && b !== '' && !isNaN(na) && !isNaN(nb)) return na - nb;
+  return String(a == null ? '' : a).localeCompare(String(b == null ? '' : b), undefined, { numeric: true, sensitivity: 'base' });
+}
+
+function dbCellText(row, key) {
+  const v = row.props[key];
+  if (Array.isArray(v)) return v.join(', ');
+  return v == null ? '' : String(v);
+}
+
+function dbMatchesFilter(row, f) {
+  const v = dbCellText(row, f.prop);
+  const want = f.value == null ? '' : String(f.value);
+  switch (f.op) {
+    case 'is': return v.toLowerCase() === want.toLowerCase();
+    case 'is not': return v.toLowerCase() !== want.toLowerCase();
+    case 'contains': return v.toLowerCase().includes(want.toLowerCase());
+    case 'is empty': return !v.trim();
+    case 'is not empty': return !!v.trim();
+    case '>': return dbCmp(v, want) > 0;
+    case '<': return dbCmp(v, want) < 0;
+    default: return true;
+  }
+}
+
+function dbVisibleRows() {
+  if (!db) return [];
+  const view = db.schema.views[db.viewIdx] || {};
+  let rows = db.rows.slice();
+  const q = (db.search || '').trim().toLowerCase();
+  if (q) rows = rows.filter(r => r.title.toLowerCase().includes(q) ||
+    Object.keys(r.props).some(k => dbCellText(r, k).toLowerCase().includes(q)));
+  const filters = Array.isArray(view.filter) ? view.filter : (view.filter ? [view.filter] : []);
+  filters.forEach(f => { if (f && f.prop) rows = rows.filter(r => dbMatchesFilter(r, f)); });
+  const sorts = Array.isArray(view.sort) ? view.sort : (view.sort ? [view.sort] : []);
+  if (sorts.length) {
+    rows.sort((a, b) => {
+      for (const s of sorts) {
+        const key = s.prop || s.property;
+        if (!key) continue;
+        const d = dbCmp(dbCellText(a, key), dbCellText(b, key)) * (String(s.dir || 'asc').startsWith('desc') ? -1 : 1);
+        if (d) return d;
+      }
+      return 0;
+    });
+  }
+  return rows;
+}
+
+function dbSelectOptions(key) {
+  const p = (db.schema.properties || {})[key] || {};
+  const declared = Array.isArray(p.options) ? p.options.map(String) : [];
+  const seen = new Set(declared.map(s => s.toLowerCase()));
+  db.rows.forEach(r => {
+    const v = dbCellText(r, key).trim();
+    if (v && !seen.has(v.toLowerCase())) { seen.add(v.toLowerCase()); declared.push(v); }
+  });
+  return declared;
+}
+
+const dbOptColor = (key, opt) => DB_SELECT_COLORS[
+  Math.abs([...String(key + '·' + opt)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) | 0, 7)) % DB_SELECT_COLORS.length];
+
+/* ---------- writes: every edit is one surgical frontmatter rewrite -------- */
+
+async function dbSetRowProp(row, key, value) {
+  const text = await dbFs.read(row.path);
+  const next = fmSet(text, key, value === '' || value == null ? null : value);
+  if (next !== text) await dbFs.write(row.path, next);
+  if (value === '' || value == null) delete row.props[key]; else row.props[key] = value;
+  // keep an open tab for this file in sync so the editor doesn't clobber it
+  const open = tabs.find(t => t.path === row.path);
+  if (open) { open.text = next; if (activeTab() === open) renderActive(); }
+}
+
+async function dbNewRow() {
+  if (!db) return;
+  const base = 'Untitled';
+  let name = base + '.md', n = 2;
+  while (db.rows.some(r => r.name.toLowerCase() === name.toLowerCase())) name = base + ' ' + (n++) + '.md';
+  const path = dbJoin(db.folder, name);
+  await dbFs.write(path, '---\n---\n\n# ' + name.replace(/\.md$/, '') + '\n');
+  db.rows.push({ path, name, title: name.replace(/\.md$/, ''), mtime: Date.now() / 1000, props: {} });
+  renderDbBody();
+  toast('Added ' + name);
+}
+
+/* ---------- render -------------------------------------------------------- */
+
+function renderDb(t) {
+  showPane('db');
+  const host = $('dbview');
+  if (!db || db.folder !== t.dbFolder) {
+    host.innerHTML = '<div class="db-loading">Loading database…</div>';
+    dbLoad(t.dbFolder)
+      .then(loaded => {
+        db = loaded;
+        t.name = (db.schema.name || t.name) + '';
+        renderTabStrip();
+      })
+      .catch(err => {
+        console.error('database load failed', err);
+        host.innerHTML = '<div class="db-loading">Could not read this folder.</div>';
+        throw err;                       // don't fall through to a render with no data
+      })
+      // rendering is a separate step: a bug in here must not be reported as
+      // "could not read this folder" — that blames the user's files for our bug
+      .then(() => { try { renderDbAll(); } catch (e) { console.error('database render failed', e); host.innerHTML = '<div class="db-loading">This database could not be displayed.</div>'; } })
+      .catch(() => {});
+    return;
+  }
+  renderDbAll();
+}
+
+function renderDbAll() {
+  const host = $('dbview');
+  host.innerHTML = '';
+  const head = document.createElement('div');
+  head.className = 'db-head';
+  const title = document.createElement('div');
+  title.className = 'db-title';
+  title.textContent = db.schema.name || 'Database';
+  head.appendChild(title);
+
+  const tabsEl = document.createElement('div');
+  tabsEl.className = 'db-views';
+  db.schema.views.forEach((v, i) => {
+    const b = document.createElement('button');
+    b.className = 'db-view' + (i === db.viewIdx ? ' on' : '');
+    b.textContent = v.name || ('View ' + (i + 1));
+    b.addEventListener('click', () => { db.viewIdx = i; renderDbAll(); });
+    tabsEl.appendChild(b);
+  });
+  const addView = document.createElement('button');
+  addView.className = 'db-view db-view-add';
+  addView.textContent = '+';
+  addView.title = 'Add a view';
+  addView.addEventListener('click', dbAddView);
+  tabsEl.appendChild(addView);
+  head.appendChild(tabsEl);
+
+  const sp = document.createElement('span'); sp.className = 'db-sp'; head.appendChild(sp);
+
+  const search = document.createElement('input');
+  search.className = 'db-search';
+  search.placeholder = 'Search…';
+  search.value = db.search || '';
+  search.addEventListener('input', () => { db.search = search.value; renderDbBody(); });
+  head.appendChild(search);
+
+  const newBtn = document.createElement('button');
+  newBtn.className = 'db-new';
+  newBtn.textContent = '+ New';
+  newBtn.addEventListener('click', dbNewRow);
+  head.appendChild(newBtn);
+  host.appendChild(head);
+
+  const bar = document.createElement('div');
+  bar.className = 'db-bar';
+  bar.id = 'db-bar';
+  host.appendChild(bar);
+
+  const body = document.createElement('div');
+  body.className = 'db-body';
+  body.id = 'db-body';
+  host.appendChild(body);
+
+  renderDbBar();
+  renderDbBody();
+}
+
+function dbPropNames() { return Object.keys(db.schema.properties || {}); }
+
+function renderDbBar() {
+  const bar = $('db-bar');
+  if (!bar) return;
+  const view = db.schema.views[db.viewIdx] || {};
+  bar.innerHTML = '';
+
+  const mk = (label, value, opts, onPick) => {
+    const wrap = document.createElement('label');
+    wrap.className = 'db-ctl';
+    wrap.appendChild(Object.assign(document.createElement('span'), { textContent: label }));
+    const sel = document.createElement('select');
+    opts.forEach(o => {
+      const op = document.createElement('option');
+      op.value = o.value; op.textContent = o.label;
+      if (String(o.value) === String(value)) op.selected = true;
+      sel.appendChild(op);
+    });
+    sel.addEventListener('change', () => onPick(sel.value));
+    wrap.appendChild(sel);
+    bar.appendChild(wrap);
+  };
+
+  mk('View', view.type || 'table',
+    [{ value: 'table', label: 'Table' }, { value: 'board', label: 'Board' }],
+    v => { view.type = v; if (v === 'board' && !view.group) view.group = dbPropNames()[0] || ''; dbSaveSchema(); renderDbAll(); });
+
+  if ((view.type || 'table') === 'board') {
+    mk('Group by', view.group || '',
+      dbPropNames().map(p => ({ value: p, label: p })),
+      v => { view.group = v; dbSaveSchema(); renderDbBody(); });
+  }
+
+  const sorts = Array.isArray(view.sort) ? view.sort : (view.sort ? [view.sort] : []);
+  const s0 = sorts[0] || {};
+  mk('Sort', s0.prop || '',
+    [{ value: '', label: 'None' }, { value: '__title', label: 'Name' }].concat(dbPropNames().map(p => ({ value: p, label: p }))),
+    v => { view.sort = v ? [{ prop: v, dir: (s0.dir || 'asc') }] : []; dbSaveSchema(); renderDbBody(); });
+  if (s0.prop) {
+    mk('Dir', s0.dir || 'asc',
+      [{ value: 'asc', label: 'Asc' }, { value: 'desc', label: 'Desc' }],
+      v => { view.sort = [{ prop: s0.prop, dir: v }]; dbSaveSchema(); renderDbBody(); });
+  }
+
+  // filter chips
+  const filters = Array.isArray(view.filter) ? view.filter : (view.filter ? [view.filter] : []);
+  filters.forEach((f, idx) => {
+    const chip = document.createElement('span');
+    chip.className = 'db-chip';
+    chip.textContent = `${f.prop} ${f.op} ${f.value == null ? '' : f.value}`.trim();
+    const x = document.createElement('button');
+    x.textContent = '✕';
+    x.title = 'Remove filter';
+    x.addEventListener('click', () => { filters.splice(idx, 1); view.filter = filters; dbSaveSchema(); renderDbBar(); renderDbBody(); });
+    chip.appendChild(x);
+    bar.appendChild(chip);
+  });
+  const addF = document.createElement('button');
+  addF.className = 'db-addfilter';
+  addF.textContent = '+ Filter';
+  addF.addEventListener('click', () => {
+    const prop = dbPropNames()[0];
+    if (!prop) { toast('Add a property first'); return; }
+    const next = filters.concat([{ prop, op: 'contains', value: '' }]);
+    view.filter = next;
+    dbSaveSchema(); renderDbBar(); renderDbBody();
+    setTimeout(() => { const el = bar.querySelector('.db-chip:last-of-type'); if (el) dbEditFilter(el, view, next.length - 1); }, 0);
+  });
+  bar.appendChild(addF);
+}
+
+function dbEditFilter(chipEl, view, idx) {
+  const filters = view.filter;
+  const f = filters[idx];
+  chipEl.innerHTML = '';
+  chipEl.classList.add('editing');
+  const propSel = document.createElement('select');
+  dbPropNames().forEach(p => { const o = document.createElement('option'); o.value = p; o.textContent = p; if (p === f.prop) o.selected = true; propSel.appendChild(o); });
+  const opSel = document.createElement('select');
+  ['contains', 'is', 'is not', 'is empty', 'is not empty', '>', '<'].forEach(op => {
+    const o = document.createElement('option'); o.value = op; o.textContent = op; if (op === f.op) o.selected = true; opSel.appendChild(o);
+  });
+  const val = document.createElement('input');
+  val.className = 'db-filter-val';
+  val.value = f.value == null ? '' : f.value;
+  val.placeholder = 'value';
+  const done = document.createElement('button');
+  done.textContent = '✓';
+  const apply = () => {
+    f.prop = propSel.value; f.op = opSel.value; f.value = val.value;
+    view.filter = filters; dbSaveSchema(); renderDbBar(); renderDbBody();
+  };
+  done.addEventListener('click', apply);
+  val.addEventListener('keydown', e => { if (e.key === 'Enter') apply(); });
+  opSel.addEventListener('change', () => { val.style.display = /empty/.test(opSel.value) ? 'none' : ''; });
+  val.style.display = /empty/.test(f.op) ? 'none' : '';
+  [propSel, opSel, val, done].forEach(el => chipEl.appendChild(el));
+  propSel.focus();
+}
+
+function renderDbBody() {
+  const body = $('db-body');
+  if (!body || !db) return;
+  const view = db.schema.views[db.viewIdx] || {};
+  body.innerHTML = '';
+  const rows = dbVisibleRows();
+  if (!db.rows.length) {
+    body.innerHTML = '<div class="db-empty"><b>No pages yet</b><span>Every .md file in this folder becomes a row. Add one with “+ New”.</span></div>';
+    return;
+  }
+  if ((view.type || 'table') === 'board') renderDbBoard(body, rows, view);
+  else renderDbTable(body, rows);
+  const count = document.createElement('div');
+  count.className = 'db-count';
+  count.textContent = rows.length + ' of ' + db.rows.length + (db.rows.length === 1 ? ' page' : ' pages');
+  body.appendChild(count);
+}
+
+/* ---------- table --------------------------------------------------------- */
+
+function renderDbTable(host, rows) {
+  const props = dbPropNames();
+  const wrap = document.createElement('div');
+  wrap.className = 'db-tablewrap';
+  const table = document.createElement('table');
+  table.className = 'db-table';
+  const thead = document.createElement('thead');
+  const hr = document.createElement('tr');
+  hr.appendChild(Object.assign(document.createElement('th'), { textContent: 'Name', className: 'db-th-name' }));
+  props.forEach(p => {
+    const th = document.createElement('th');
+    th.textContent = p;
+    th.title = (db.schema.properties[p] || {}).type || 'text';
+    hr.appendChild(th);
+  });
+  const addTh = document.createElement('th');
+  addTh.className = 'db-th-add';
+  const addBtn = document.createElement('button');
+  addBtn.textContent = '+';
+  addBtn.title = 'Add a property';
+  addBtn.addEventListener('click', dbAddProperty);
+  addTh.appendChild(addBtn);
+  hr.appendChild(addTh);
+  thead.appendChild(hr);
+  table.appendChild(thead);
+
+  const tb = document.createElement('tbody');
+  rows.forEach(row => {
+    const tr = document.createElement('tr');
+    const nameTd = document.createElement('td');
+    nameTd.className = 'db-name';
+    const a = document.createElement('button');
+    a.className = 'db-open';
+    a.textContent = row.title;
+    a.title = 'Open ' + row.name;
+    a.addEventListener('click', () => dbOpenRow(row));
+    nameTd.appendChild(a);
+    tr.appendChild(nameTd);
+    props.forEach(p => tr.appendChild(dbCell(row, p)));
+    tr.appendChild(document.createElement('td'));
+    tb.appendChild(tr);
+  });
+  table.appendChild(tb);
+  wrap.appendChild(table);
+  host.appendChild(wrap);
+}
+
+function dbCell(row, key) {
+  const td = document.createElement('td');
+  td.className = 'db-cell';
+  const type = ((db.schema.properties[key] || {}).type) || 'text';
+  const value = dbCellText(row, key);
+
+  if (type === 'checkbox') {
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = /^(true|yes|1|x|done)$/i.test(value);
+    cb.addEventListener('change', () => dbSetRowProp(row, key, cb.checked ? 'true' : 'false'));
+    td.appendChild(cb);
+    return td;
+  }
+  if (type === 'select' || type === 'multi_select') {
+    const parts = type === 'multi_select' ? value.split(',').map(s => s.trim()).filter(Boolean) : (value ? [value] : []);
+    parts.forEach(v => {
+      const pill = document.createElement('span');
+      pill.className = 'db-pill';
+      pill.textContent = v;
+      pill.style.setProperty('--pill', dbOptColor(key, v));
+      td.appendChild(pill);
+    });
+    if (!parts.length) td.appendChild(Object.assign(document.createElement('span'), { className: 'db-blank', textContent: '—' }));
+    td.classList.add('db-editable');
+    td.addEventListener('click', () => dbEditCell(td, row, key, type));
+    return td;
+  }
+  if (type === 'relation' && /^\[\[.+\]\]$/.test(value.trim())) {
+    const link = document.createElement('button');
+    link.className = 'db-rel';
+    link.textContent = value.trim().slice(2, -2);
+    link.addEventListener('click', (e) => { e.stopPropagation(); openWikiLink(value.trim().slice(2, -2)); });
+    td.appendChild(link);
+    td.classList.add('db-editable');
+    td.addEventListener('click', () => dbEditCell(td, row, key, type));
+    return td;
+  }
+  td.textContent = value || '—';
+  if (!value) td.classList.add('db-blank');
+  td.classList.add('db-editable');
+  td.addEventListener('click', () => dbEditCell(td, row, key, type));
+  return td;
+}
+
+function dbEditCell(td, row, key, type) {
+  if (td.querySelector('input, select')) return;
+  const current = dbCellText(row, key);
+  let input;
+  if (type === 'select') {
+    input = document.createElement('select');
+    const blank = document.createElement('option'); blank.value = ''; blank.textContent = '—'; input.appendChild(blank);
+    const opts = dbSelectOptions(key);
+    if (current && !opts.some(o => o.toLowerCase() === current.toLowerCase())) opts.push(current);
+    opts.forEach(o => { const op = document.createElement('option'); op.value = o; op.textContent = o; if (o === current) op.selected = true; input.appendChild(op); });
+    const other = document.createElement('option'); other.value = '__new'; other.textContent = '+ New option…'; input.appendChild(other);
+  } else {
+    input = document.createElement('input');
+    input.type = type === 'date' ? 'date' : type === 'number' ? 'number' : 'text';
+    input.value = current;
+  }
+  input.className = 'db-input';
+  td.innerHTML = '';
+  td.appendChild(input);
+  input.focus();
+  if (input.select) try { input.select(); } catch (_) {}
+  let closed = false;
+  const commit = async (save) => {
+    if (closed) return; closed = true;
+    let v = save ? input.value : current;
+    if (save && v === '__new') {
+      const el = document.createElement('input');
+      el.className = 'db-input'; el.placeholder = 'New option…';
+      td.innerHTML = ''; td.appendChild(el); el.focus();
+      closed = false;
+      const fin = async (ok) => {
+        if (closed) return; closed = true;
+        const nv = ok ? el.value.trim() : '';
+        if (nv) {
+          const p = db.schema.properties[key] || (db.schema.properties[key] = { type: 'select' });
+          p.options = Array.isArray(p.options) ? p.options : [];
+          if (!p.options.some(o => String(o).toLowerCase() === nv.toLowerCase())) { p.options.push(nv); dbSaveSchema(); }
+          await dbSetRowProp(row, key, nv);
+        }
+        renderDbBody();
+      };
+      el.addEventListener('blur', () => fin(true));
+      el.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); fin(true); } else if (e.key === 'Escape') fin(false); });
+      return;
+    }
+    if (save && v !== current) await dbSetRowProp(row, key, v);
+    renderDbBody();
+  };
+  input.addEventListener('blur', () => commit(true));
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); commit(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); commit(false); }
+  });
+  if (type === 'select') input.addEventListener('change', () => commit(true));
+}
+
+/* ---------- board --------------------------------------------------------- */
+
+function renderDbBoard(host, rows, view) {
+  const key = view.group || dbPropNames()[0];
+  if (!key) { host.innerHTML = '<div class="db-empty"><b>Nothing to group by</b><span>Add a property first.</span></div>'; return; }
+  const cols = dbSelectOptions(key);
+  const board = document.createElement('div');
+  board.className = 'db-board';
+  const groups = [{ opt: '', label: 'No ' + key }].concat(cols.map(o => ({ opt: o, label: o })));
+  groups.forEach(g => {
+    const col = document.createElement('div');
+    col.className = 'db-col';
+    col.dataset.opt = g.opt;
+    const h = document.createElement('div');
+    h.className = 'db-col-head';
+    const dot = document.createElement('i');
+    dot.className = 'db-dot';
+    dot.style.background = g.opt ? dbOptColor(key, g.opt) : 'var(--border)';
+    h.appendChild(dot);
+    h.appendChild(Object.assign(document.createElement('span'), { textContent: g.label }));
+    const mine = rows.filter(r => (dbCellText(r, key).trim() || '') === g.opt);
+    h.appendChild(Object.assign(document.createElement('b'), { textContent: String(mine.length) }));
+    col.appendChild(h);
+    const list = document.createElement('div');
+    list.className = 'db-col-list';
+    mine.forEach(r => list.appendChild(dbCard(r, key)));
+    col.appendChild(list);
+    const add = document.createElement('button');
+    add.className = 'db-col-add';
+    add.textContent = '+ New';
+    add.addEventListener('click', async () => { await dbNewRow(); const last = db.rows[db.rows.length - 1]; if (g.opt) await dbSetRowProp(last, key, g.opt); renderDbBody(); });
+    col.appendChild(add);
+    board.appendChild(col);
+  });
+  host.appendChild(board);
+}
+
+function dbCard(row, groupKey) {
+  const card = document.createElement('div');
+  card.className = 'db-card';
+  card.dataset.path = row.path;
+  const t = document.createElement('div');
+  t.className = 'db-card-title';
+  t.textContent = row.title;
+  card.appendChild(t);
+  const meta = document.createElement('div');
+  meta.className = 'db-card-meta';
+  dbPropNames().filter(p => p !== groupKey).slice(0, 3).forEach(p => {
+    const v = dbCellText(row, p);
+    if (!v) return;
+    const s = document.createElement('span');
+    s.className = 'db-card-prop';
+    s.textContent = v;
+    meta.appendChild(s);
+  });
+  if (meta.children.length) card.appendChild(meta);
+  dbWireCardDrag(card, row, groupKey);
+  return card;
+}
+
+// Pointer-events drag (not HTML5 DnD): works with touch on Android, and can be
+// driven by synthetic events in tests.
+function dbWireCardDrag(card, row, groupKey) {
+  card.addEventListener('pointerdown', (e) => {
+    if (e.button != null && e.button !== 0) return;
+    const startX = e.clientX, startY = e.clientY;
+    let dragging = false, ghost = null;
+    const onMove = (ev) => {
+      if (!dragging && Math.hypot(ev.clientX - startX, ev.clientY - startY) < 5) return;
+      if (!dragging) {
+        dragging = true;
+        card.classList.add('dragging');
+        ghost = card.cloneNode(true);
+        ghost.className = 'db-card db-ghost';
+        ghost.style.width = card.offsetWidth + 'px';
+        document.body.appendChild(ghost);
+        try { card.setPointerCapture(e.pointerId); } catch (_) {}
+      }
+      ghost.style.left = (ev.clientX - 20) + 'px';
+      ghost.style.top = (ev.clientY - 14) + 'px';
+      document.querySelectorAll('.db-col').forEach(c => c.classList.remove('drop'));
+      const col = dbColAt(ev.clientX, ev.clientY);
+      if (col) col.classList.add('drop');
+    };
+    const onUp = async (ev) => {
+      card.removeEventListener('pointermove', onMove);
+      card.removeEventListener('pointerup', onUp);
+      card.removeEventListener('pointercancel', onUp);
+      if (ghost) ghost.remove();
+      card.classList.remove('dragging');
+      document.querySelectorAll('.db-col').forEach(c => c.classList.remove('drop'));
+      if (!dragging) { dbOpenRow(row); return; }         // a click, not a drag
+      const col = dbColAt(ev.clientX, ev.clientY);
+      if (!col) return;
+      const opt = col.dataset.opt || '';
+      if ((dbCellText(row, groupKey).trim() || '') === opt) return;
+      await dbSetRowProp(row, groupKey, opt || null);
+      renderDbBody();
+    };
+    card.addEventListener('pointermove', onMove);
+    card.addEventListener('pointerup', onUp);
+    card.addEventListener('pointercancel', onUp);
+  });
+}
+
+function dbColAt(x, y) {
+  return [...document.querySelectorAll('.db-col')].find(c => {
+    const r = c.getBoundingClientRect();
+    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+  }) || null;
+}
+
+/* ---------- actions ------------------------------------------------------- */
+
+function dbOpenRow(row) {
+  if (TAURI && row.path) openTauriPath(row.path);
+  else toast('Open the folder in the app to edit this page');
+}
+
+function dbAddProperty() {
+  const bar = $('db-bar');
+  if (!bar || bar.querySelector('.db-newprop')) return;
+  const wrap = document.createElement('span');
+  wrap.className = 'db-chip db-newprop editing';
+  const name = document.createElement('input');
+  name.placeholder = 'Property name…';
+  name.className = 'db-filter-val';
+  const type = document.createElement('select');
+  DB_TYPES.forEach(t => { const o = document.createElement('option'); o.value = t; o.textContent = t.replace('_', '-'); type.appendChild(o); });
+  const ok = document.createElement('button');
+  ok.textContent = '✓';
+  const commit = () => {
+    const n = name.value.trim();
+    if (n && !db.schema.properties[n]) {
+      db.schema.properties[n] = { type: type.value };
+      if (type.value === 'select' || type.value === 'multi_select') db.schema.properties[n].options = [];
+      dbSaveSchema();
+    }
+    wrap.remove();
+    renderDbBar(); renderDbBody();
+  };
+  ok.addEventListener('click', commit);
+  name.addEventListener('keydown', e => { if (e.key === 'Enter') commit(); else if (e.key === 'Escape') { wrap.remove(); } });
+  [name, type, ok].forEach(el => wrap.appendChild(el));
+  bar.appendChild(wrap);
+  name.focus();
+}
+
+function dbAddView() {
+  const type = (db.schema.views[db.viewIdx] || {}).type === 'board' ? 'table' : 'board';
+  const v = { name: type === 'board' ? 'Board' : 'Table', type };
+  if (type === 'board') v.group = dbPropNames()[0] || '';
+  db.schema.views.push(v);
+  db.viewIdx = db.schema.views.length - 1;
+  dbSaveSchema();
+  renderDbAll();
+}
+
+/* ---------- entry points -------------------------------------------------- */
+
+async function openDatabase(folderPath) {
+  if (!folderPath) { toast('Open a folder first'); return; }
+  const name = folderPath.split(/[/\\]/).filter(Boolean).pop() || 'Database';
+  const existing = tabs.find(t => t.kind === 'db' && t.dbFolder === folderPath);
+  if (existing) { activate(existing.id); return; }
+  const tab = await makeTab({ name, mtime: 0 }, 'db', { text: '' });
+  tab.dbFolder = folderPath;
+  tab.kind = 'db';
+  db = null;                       // force a fresh load for this folder
+  addTab(tab);
+}
+
+// Turn the open folder into a database: writes the schema file if absent.
+async function createDatabaseHere(folderPath) {
+  const target = folderPath || (folder && folder.root);
+  if (!target) { toast('Open a folder first (⌘⇧O)'); return; }
+  const schemaPath = dbJoin(target, DB_SCHEMA_FILE);
+  const existing = await dbFs.read(schemaPath);
+  if (!existing) {
+    const name = target.split(/[/\\]/).filter(Boolean).pop() || 'Database';
+    await dbFs.write(schemaPath, dumpSchema(dbDefaultSchema(name)));
+    toast('Created ' + DB_SCHEMA_FILE);
+  }
+  db = null;
+  await openDatabase(target);
+}
+
+function wireDb() {
+  // reload when the folder changes underneath us (e.g. a row edited in a tab)
+  window.addEventListener('focus', () => {
+    const t = activeTab();
+    if (t && t.kind === 'db' && db && db.folder === t.dbFolder) {
+      dbLoad(db.folder).then(next => {
+        const view = db.viewIdx, search = db.search;
+        db = next; db.viewIdx = Math.min(view, db.schema.views.length - 1); db.search = search;
+        if (activeTab() === t) renderDbBody();
+      }).catch(() => {});
+    }
+  });
+}
