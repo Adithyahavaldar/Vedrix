@@ -1412,9 +1412,12 @@ function renderProps(t) {
   if (!panel) return;
   const show = !!(t && t.kind === 'md' && !t.presenting);
   const entries = show ? parseFm(t.text || '') : [];
-  if (!show || (!entries.length && !propsAdding)) { panel.hidden = true; panel.innerHTML = ''; return; }
+  if (!show) { panel.hidden = true; panel.innerHTML = ''; return; }
   panel.hidden = false;
   panel.innerHTML = '';
+  // a page with no properties still offers the way in — otherwise the whole
+  // property system is invisible on the (very common) file with no frontmatter
+  panel.classList.toggle('empty', !entries.length);
 
   entries.forEach(e => {
     const type = propType(e);
@@ -1496,10 +1499,31 @@ function editProp(t, entry, valEl) {
   });
 }
 
+// Inline "new property" row. (Deliberately not window.prompt: WKWebView
+// suppresses it in some configurations, which would make the button dead.)
 function addProp(t) {
-  const name = prompt('Property name');
-  if (!name || !name.trim()) return;
-  setProp(t, name.trim(), '');
+  const panel = $('props-panel');
+  if (!panel || panel.querySelector('.prop-new')) return;
+  const row = document.createElement('div');
+  row.className = 'prop-row prop-new';
+  const input = document.createElement('input');
+  input.className = 'prop-input prop-new-key';
+  input.placeholder = 'Property name…';
+  row.appendChild(input);
+  panel.insertBefore(row, panel.querySelector('.prop-add'));
+  input.focus();
+  let done = false;
+  const commit = (save) => {
+    if (done) return; done = true;
+    const name = input.value.trim();
+    row.remove();
+    if (save && name) setProp(t, name, ''); else renderProps(t);
+  };
+  input.addEventListener('blur', () => commit(true));
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); commit(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); commit(false); }
+  });
 }
 
 // The one place a property write happens: surgical edit → persist → re-render.
@@ -1662,8 +1686,8 @@ function emptyNote(text) {
 
 /* ---- ⌘P — jump to any page by title ---- */
 function openPageJump() {
-  if (!folder) { toast('Open a folder to jump between pages'); return; }
   buildPageIndex();
+  if (!folder) toast('Open a folder (⌘⇧O) to jump across your whole vault');
   openCmd();
   cmdState.pageMode = true;
   $('cmd-input').placeholder = 'Jump to a page…';
@@ -3005,6 +3029,10 @@ function cmdActions() {
   if (t && t.kind !== 'unsupported') list.push({ id: 'map', label: 'Open mind map', hint: '⌘M', icon: 'map', run: () => { closeCmd(); toggleMap(); } });
   list.push({ id: 'ai', label: 'Open AI assistant', hint: '⌘J', icon: 'ai', filled: true, run: () => { closeCmd(); if ($('ai-panel').hidden) toggleAiPanel(); } });
   if (folder) list.push({ id: 'jump', label: 'Jump to a page', hint: '⌘P', icon: 'doc', run: () => { closeCmd(); setTimeout(openPageJump, 0); } });
+  if (t && t.kind === 'md') {
+    list.push({ id: 'add-prop', label: 'Add a page property', hint: '', icon: 'doc', run: () => { closeCmd(); setTimeout(() => addProp(activeTab()), 30); } });
+    list.push({ id: 'show-links', label: 'Show links & backlinks', hint: '', icon: 'find', run: () => { closeCmd(); sideMode = 'links'; sidebarCollapsed = false; updateSidebar(); } });
+  }
   if (t) list.push({ id: 'summarize', label: 'Summarize this document', hint: 'AI', icon: 'ai', filled: true, run: () => { closeCmd(); toggleAiPanel(true); if (typeof aiQuick === 'function') aiQuick('summarize'); } });
   if (t) list.push({ id: 'export', label: 'Export…', hint: '', icon: 'export', run: () => { closeCmd(); openExportDialog(); } });
   list.push({ id: 'open-folder', label: 'Open a folder (wiki mode)', hint: '⌘⇧O', icon: 'doc', run: () => { closeCmd(); if (typeof openFolder === 'function') openFolder(); } });

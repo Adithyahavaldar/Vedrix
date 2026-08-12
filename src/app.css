@@ -351,6 +351,10 @@ body.editing #context-bar, body.rich-editing #context-bar { display: none; }
   opacity: 0; transition: opacity .14s, background .12s;
 }
 #props-panel:hover .prop-add, .prop-add:focus-visible { opacity: 1; }
+/* no properties yet → keep the way in visible, or the feature is undiscoverable */
+#props-panel.empty { padding-bottom: 2px; }
+#props-panel.empty .prop-add { opacity: .6; }
+#props-panel.empty:hover .prop-add { opacity: 1; }
 .prop-add:hover { background: var(--hover); color: var(--fg); }
 .prop-add svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; }
 
@@ -1893,3 +1897,7 @@ body.mobile .hint-mobile { display: block; }
   #history-panel { top: 52px; right: 8px; left: 8px; bottom: auto; width: auto; }
   .icon-btn svg { width: 18px; height: 18px; }
 }
+
+/* inline "new property" row */
+.prop-new { padding-left: 2px; }
+.prop-new-key { flex: 0 0 200px; max-width: 200px; }
