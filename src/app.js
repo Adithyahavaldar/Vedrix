@@ -49,7 +49,7 @@ const md = window.markdownit({
     }
     return '';
   },
-}).use(window.markdownitTaskLists);
+}).use(window.markdownitTaskLists).use(wikiLinkPlugin);
 
 /* ---------- Settings ---------- */
 
@@ -779,17 +779,24 @@ function updateSidebar() {
   const hasToc = !tocEl.classList.contains('hidden');
   const hasFiles = !!folder || library.projects.length > 0;
   const hasNotes = canAnnotate(activeTab());
-  $('side-tabs').hidden = !(hasFiles || hasNotes);
+  const at = activeTab();
+  const hasLinks = !!(at && at.kind === 'md');
+  $('side-tabs').hidden = !(hasFiles || hasNotes || hasLinks);
   const notesBtn = document.querySelector('#side-tabs button[data-m="notes"]');
   if (notesBtn) notesBtn.hidden = !hasNotes;
+  const linksBtn = document.querySelector('#side-tabs button[data-m="links"]');
+  if (linksBtn) linksBtn.hidden = !hasLinks;
   let mode = sideMode;
   if (mode === 'files' && !hasFiles) mode = 'toc';
   if (mode === 'notes' && !hasNotes) mode = 'toc';
+  if (mode === 'links' && !hasLinks) mode = 'toc';
   tocEl.hidden = mode !== 'toc';
   $('files-pane').hidden = mode !== 'files';
   $('filetree').hidden = !folder;
   $('notes-pane').hidden = mode !== 'notes';
+  $('links-pane').hidden = mode !== 'links';
   if (mode === 'notes') renderNotesPane();
+  if (mode === 'links') renderLinksPane();
   document.querySelectorAll('#side-tabs button').forEach(b => b.classList.toggle('sel', b.dataset.m === mode));
   $('sidebar').classList.toggle('hidden', sidebarCollapsed || (!hasToc && !hasFiles && !hasNotes));
   if (typeof reclampDocks === 'function') reclampDocks();   // freed/consumed width → re-fit both docks
@@ -1092,6 +1099,9 @@ function renderActive() {
   contentEl.innerHTML = t.html || '';
   fixupContent(t);
   applyAnnotations(t);           // re-draw saved highlights/notes
+  renderProps(t);                // frontmatter → property panel
+  decorateWikiLinks(t);          // resolve [[links]] against the vault
+  loadBacklinks(t);              // reverse index (async)
   renderEnhancements(t).then(() => { if (activeId === t.id && ['md', 'docx', 'sheet'].includes(t.kind)) buildHeadingToc(); });
   if (['md', 'docx', 'sheet'].includes(t.kind)) buildHeadingToc(); else clearToc();
   applyZoom(t);
@@ -1274,6 +1284,393 @@ function fixupContent(t) {
   }
 }
 
+/* ==========================================================================
+   N1 — Pages & properties (local-first "Notion" layer)
+
+   Four pieces, all file-first: YAML frontmatter IS the property system,
+   [[wikilinks]] are the one link syntax, backlinks are the reverse index,
+   and ⌘P jumps to any page by title. Nothing is stored outside the files.
+   ========================================================================== */
+
+/* ---- Frontmatter: parse + SURGICAL write ----------------------------------
+   The write path never re-serializes the whole block — it rewrites exactly
+   one line — so key order, comments, quoting style and spacing all survive.
+   (Round-trip fidelity here is the single highest-risk mechanic in N1: a
+   property edit must never mangle a file the user hand-wrote.) */
+
+const FM_RE = /^﻿?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/;
+
+// → { fm: the raw block incl. delimiters (or ''), body: everything after }
+function splitFm(text) {
+  const m = (text || '').match(FM_RE);
+  if (!m) return { fm: '', body: text || '' };
+  return { fm: m[0], body: (text || '').slice(m[0].length) };
+}
+
+// Scalar → display value. Deliberately tiny: we support the YAML subset that
+// round-trips safely (scalars + inline/block lists), never arbitrary YAML.
+function fmScalar(raw) {
+  let v = (raw || '').trim();
+  if ((v.startsWith('"') && v.endsWith('"') && v.length > 1) ||
+      (v.startsWith("'") && v.endsWith("'") && v.length > 1)) v = v.slice(1, -1);
+  return v;
+}
+
+// → [{ key, value, list, line }] in file order
+function parseFm(text) {
+  const { fm } = splitFm(text);
+  if (!fm) return [];
+  const lines = fm.split(/\r?\n/);
+  const out = [];
+  for (let i = 1; i < lines.length - 1; i++) {
+    const line = lines[i];
+    if (/^\s*#/.test(line) || !line.trim()) continue;
+    // block-list continuation ("  - item") belongs to the previous key
+    const item = line.match(/^\s+-\s+(.*)$/);
+    if (item && out.length) {
+      const prev = out[out.length - 1];
+      prev.list = prev.list || [];
+      prev.list.push(fmScalar(item[1]));
+      continue;
+    }
+    const m = line.match(/^([A-Za-z0-9_][A-Za-z0-9_ -]*)\s*:\s*(.*)$/);
+    if (!m) continue;
+    const key = m[1].trim(), rest = m[2];
+    const entry = { key, value: fmScalar(rest), line: i };
+    // note: a [[wikilink]] relation also starts with '[' — it is NOT an inline list
+    if (/^\[.*\]$/.test(rest.trim()) && !/^\[\[.*\]\]$/.test(rest.trim())) {   // inline list [a, b]
+      entry.list = rest.trim().slice(1, -1).split(',').map(fmScalar).filter(Boolean);
+      entry.inline = true;
+    } else if (!rest.trim()) {
+      entry.list = [];                                   // maybe a block list
+    }
+    out.push(entry);
+  }
+  return out;
+}
+
+function fmSerializeValue(v) {
+  if (Array.isArray(v)) return '[' + v.join(', ') + ']';
+  const s = String(v);
+  // quote only when YAML would otherwise misread it
+  return /^[\s]|[\s]$|^[#&*!|>%@`]|:\s|^-\s|^$/.test(s) ? JSON.stringify(s) : s;
+}
+
+// Surgical single-key rewrite. Adds the key (or a whole frontmatter block)
+// when absent; removes the line when value is null.
+function fmSet(text, key, value) {
+  const { fm, body } = splitFm(text);
+  const nl = /\r\n/.test(text || '') ? '\r\n' : '\n';
+  if (!fm) {
+    if (value == null) return text;
+    return '---' + nl + key + ': ' + fmSerializeValue(value) + nl + '---' + nl + (body || '');
+  }
+  const lines = fm.split(/\r?\n/);
+  const entry = parseFm(text).find(e => e.key === key);
+  if (entry) {
+    // drop any block-list continuation lines that belong to this key
+    let end = entry.line;
+    while (end + 1 < lines.length - 1 && /^\s+-\s+/.test(lines[end + 1])) end++;
+    if (value == null) lines.splice(entry.line, end - entry.line + 1);
+    else lines.splice(entry.line, end - entry.line + 1, key + ': ' + fmSerializeValue(value));
+  } else {
+    if (value == null) return text;
+    lines.splice(lines.length - 1, 0, key + ': ' + fmSerializeValue(value));  // before closing ---
+  }
+  return lines.join(nl) + body;
+}
+
+/* ---- Property types -------------------------------------------------------
+   Inferred from the value, not declared. Keeps files portable: any editor
+   writing `status: Done` gets a select chip here for free. */
+function propType(entry) {
+  if (entry.list) return 'list';
+  const v = (entry.value || '').trim();
+  if (/^(true|false|yes|no)$/i.test(v)) return 'checkbox';
+  if (/^-?\d+(\.\d+)?$/.test(v)) return 'number';
+  if (/^\d{4}-\d{2}-\d{2}(T[\d:]+)?/.test(v)) return 'date';
+  if (/^\[\[.+\]\]$/.test(v)) return 'relation';
+  if (/^https?:\/\//i.test(v)) return 'url';
+  return 'text';
+}
+
+const PROP_ICONS = {
+  text:'M4 7h16M4 12h10M4 17h13', number:'M6 4l-1 16M14 4l-1 16M4 9h16M3 15h16',
+  date:'M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v13H4zM4 10h16M9 3v4M15 3v4',
+  checkbox:'M4 6.5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zM8 12l3 3 5-6',
+  list:'M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01',
+  relation:'M10 14a4 4 0 0 0 6 .5l3-3a4 4 0 0 0-6-6l-1.5 1.5M14 10a4 4 0 0 0-6-.5l-3 3a4 4 0 0 0 6 6l1.5-1.5',
+  url:'M10 14a4 4 0 0 0 6 .5l3-3a4 4 0 0 0-6-6l-1.5 1.5M14 10a4 4 0 0 0-6-.5l-3 3a4 4 0 0 0 6 6l1.5-1.5',
+};
+
+/* ---- The property panel (above the document, never inside the editor) ----
+   It lives OUTSIDE #content on purpose: #content becomes contentEditable in
+   rich mode, so anything inside it would be typed into — and serialized back
+   into the markdown body. */
+function renderProps(t) {
+  const panel = $('props-panel');
+  if (!panel) return;
+  const show = !!(t && t.kind === 'md' && !t.presenting);
+  const entries = show ? parseFm(t.text || '') : [];
+  if (!show || (!entries.length && !propsAdding)) { panel.hidden = true; panel.innerHTML = ''; return; }
+  panel.hidden = false;
+  panel.innerHTML = '';
+
+  entries.forEach(e => {
+    const type = propType(e);
+    const row = document.createElement('div');
+    row.className = 'prop-row';
+    const k = document.createElement('button');
+    k.className = 'prop-key'; k.type = 'button'; k.title = type;
+    k.innerHTML = '<svg viewBox="0 0 24 24"><path d="' + (PROP_ICONS[type] || PROP_ICONS.text) + '"/></svg><span></span>';
+    k.querySelector('span').textContent = e.key;
+    row.appendChild(k);
+
+    const val = document.createElement('div');
+    val.className = 'prop-val prop-' + type;
+    if (type === 'list') {
+      (e.list || []).forEach(item => {
+        const chip = document.createElement('span');
+        chip.className = 'prop-chip'; chip.textContent = item; val.appendChild(chip);
+      });
+      if (!(e.list || []).length) val.innerHTML = '<span class="prop-empty">Empty</span>';
+    } else if (type === 'checkbox') {
+      const on = /^(true|yes)$/i.test(e.value);
+      const cb = document.createElement('button');
+      cb.className = 'prop-check' + (on ? ' on' : ''); cb.type = 'button';
+      cb.innerHTML = on ? '<svg viewBox="0 0 24 24"><path d="M5 12l4 4L19 6"/></svg>' : '';
+      cb.addEventListener('click', () => setProp(t, e.key, on ? 'false' : 'true'));
+      val.appendChild(cb);
+    } else if (type === 'relation') {
+      const name = e.value.replace(/^\[\[|\]\]$/g, '');
+      const a = document.createElement('a');
+      a.className = 'wikilink'; a.textContent = name; a.href = '#';
+      a.addEventListener('click', ev => { ev.preventDefault(); openWikiLink(name, t); });
+      val.appendChild(a);
+    } else if (type === 'url') {
+      const a = document.createElement('a');
+      a.href = e.value; a.target = '_blank'; a.rel = 'noopener'; a.textContent = e.value;
+      val.appendChild(a);
+    } else {
+      val.textContent = e.value || '';
+      if (!e.value) val.innerHTML = '<span class="prop-empty">Empty</span>';
+    }
+    if (!['checkbox', 'relation', 'url'].includes(type)) {
+      val.tabIndex = 0;
+      val.addEventListener('click', () => editProp(t, e, val));
+      val.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); editProp(t, e, val); } });
+    }
+    row.appendChild(val);
+    panel.appendChild(row);
+  });
+
+  const add = document.createElement('button');
+  add.className = 'prop-add'; add.type = 'button';
+  add.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg> Add a property';
+  add.addEventListener('click', () => addProp(t));
+  panel.appendChild(add);
+}
+
+let propsAdding = false;
+
+// Inline edit of one property value.
+function editProp(t, entry, valEl) {
+  const isList = !!entry.list;
+  const input = document.createElement('input');
+  input.className = 'prop-input';
+  input.value = isList ? (entry.list || []).join(', ') : (entry.value || '');
+  valEl.replaceWith(input);
+  input.focus(); input.select();
+  let done = false;
+  const commit = (save) => {
+    if (done) return; done = true;
+    if (save) {
+      const raw = input.value.trim();
+      setProp(t, entry.key, isList ? raw.split(',').map(s => s.trim()).filter(Boolean) : raw);
+    } else renderProps(t);
+  };
+  input.addEventListener('blur', () => commit(true));
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); commit(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); commit(false); }
+  });
+}
+
+function addProp(t) {
+  const name = prompt('Property name');
+  if (!name || !name.trim()) return;
+  setProp(t, name.trim(), '');
+}
+
+// The one place a property write happens: surgical edit → persist → re-render.
+function setProp(t, key, value) {
+  if (!t) return;
+  const next = fmSet(t.text || '', key, value);
+  if (next === t.text) { renderProps(t); return; }
+  t.text = next;
+  t.fm = splitFm(next).fm;
+  renderProps(t);
+  setDirty(t, true);
+  saveEditor(t);
+  if (folder) pageIndex.dirty = true;
+}
+
+/* ---- [[wikilinks]] --------------------------------------------------------
+   One syntax for page links and relations. Registered as a markdown-it inline
+   rule so code spans/fences are respected for free. */
+function wikiLinkPlugin(mdit) {
+  mdit.inline.ruler.before('link', 'wikilink', (state, silent) => {
+    const src = state.src, pos = state.pos;
+    if (src.charCodeAt(pos) !== 0x5B || src.charCodeAt(pos + 1) !== 0x5B) return false;
+    const end = src.indexOf(']]', pos + 2);
+    if (end < 0) return false;
+    const inner = src.slice(pos + 2, end);
+    if (!inner || inner.includes('[[')) return false;
+    if (!silent) {
+      const pipe = inner.indexOf('|');
+      const target = (pipe > -1 ? inner.slice(0, pipe) : inner).trim();
+      const label = (pipe > -1 ? inner.slice(pipe + 1) : inner).trim();
+      const open = state.push('link_open', 'a', 1);
+      open.attrs = [['href', '#'], ['class', 'wikilink'], ['data-wiki', target]];
+      const txt = state.push('text', '', 0);
+      txt.content = label;
+      state.push('link_close', 'a', -1);
+    }
+    state.pos = end + 2;
+    return true;
+  });
+}
+
+/* ---- Page index (titles for resolution, ⌘P and backlinks) ---- */
+const pageIndex = { pages: [], root: null, dirty: true };
+
+function buildPageIndex() {
+  pageIndex.pages = [];
+  if (!folder || !folder.tree) return;
+  const walk = (entries) => {
+    for (const e of entries) {
+      if (e.dir) { walk(e.children || []); continue; }
+      if (!/\.(md|markdown|mdown)$/i.test(e.name)) continue;
+      pageIndex.pages.push({
+        name: e.name,
+        title: e.name.replace(/\.(md|markdown|mdown)$/i, ''),
+        path: e.path,
+        rel: folder.root && e.path.startsWith(folder.root) ? e.path.slice(folder.root.length + 1) : e.path,
+      });
+    }
+  };
+  walk(folder.tree);
+  pageIndex.root = folder.root;
+  pageIndex.dirty = false;
+}
+
+// Resolve "[[Some page]]" → an indexed page (exact title, then path suffix, then case-insensitive)
+function resolveWiki(target) {
+  if (pageIndex.dirty) buildPageIndex();
+  const t = target.replace(/\.(md|markdown)$/i, '').trim();
+  const lower = t.toLowerCase();
+  return pageIndex.pages.find(p => p.title === t)
+      || pageIndex.pages.find(p => p.rel.replace(/\.(md|markdown)$/i, '') === t)
+      || pageIndex.pages.find(p => p.title.toLowerCase() === lower)
+      || pageIndex.pages.find(p => p.rel.toLowerCase().replace(/\.(md|markdown)$/i, '') === lower)
+      || null;
+}
+
+async function openWikiLink(target, from) {
+  const hit = resolveWiki(target);
+  if (!hit) { toast('No page named “' + target + '”'); return; }
+  if (from && from.path) { navStack.push(from.path); navForward.length = 0; }
+  await openTauriPath(hit.path);
+}
+
+// Mark resolved/unresolved links after render so missing pages read as missing.
+function decorateWikiLinks(t) {
+  contentEl.querySelectorAll('a.wikilink[data-wiki]').forEach(a => {
+    const target = a.getAttribute('data-wiki');
+    const hit = folder ? resolveWiki(target) : null;
+    a.classList.toggle('missing', !hit);
+    if (!hit) a.title = folder ? 'No page named “' + target + '”' : 'Open a folder to link pages';
+    a.addEventListener('click', (e) => { e.preventDefault(); openWikiLink(target, t); });
+  });
+}
+
+/* ---- Backlinks ------------------------------------------------------------
+   The reverse index — computed, never authored. Reuses the native
+   search_folder command rather than adding a second scanner. */
+const backlinks = { forPath: null, items: [], loading: false };
+
+async function loadBacklinks(t) {
+  backlinks.items = []; backlinks.forPath = t && t.path; backlinks.loading = true;
+  if (!t || !t.path || !folder || !TAURI) { backlinks.loading = false; return; }
+  const title = t.name.replace(/\.(md|markdown|mdown)$/i, '');
+  try {
+    const hits = await TAURI.core.invoke('search_folder', { root: folder.root, query: '[[' + title });
+    backlinks.items = (hits || []).filter(h => h.path !== t.path);
+  } catch (err) { backlinks.items = []; }
+  backlinks.loading = false;
+  if (activeId === t.id && sideMode === 'links') renderLinksPane();
+}
+
+function renderLinksPane() {
+  const host = $('links-pane');
+  if (!host) return;
+  host.innerHTML = '';
+  const t = activeTab();
+  if (!t) return;
+  const head = (label, n) => {
+    const h = document.createElement('div');
+    h.className = 'links-head';
+    h.textContent = label + (n != null ? ' · ' + n : '');
+    host.appendChild(h);
+  };
+  // outgoing
+  const out = [...contentEl.querySelectorAll('a.wikilink[data-wiki]')]
+    .map(a => a.getAttribute('data-wiki'))
+    .filter((v, i, arr) => arr.indexOf(v) === i);
+  head('Links from this page', out.length);
+  if (!out.length) host.appendChild(emptyNote('No [[links]] yet'));
+  out.forEach(target => {
+    const hit = folder ? resolveWiki(target) : null;
+    const row = document.createElement('button');
+    row.className = 'link-row' + (hit ? '' : ' missing');
+    row.innerHTML = '<span class="lr-title"></span><span class="lr-sub"></span>';
+    row.querySelector('.lr-title').textContent = target;
+    row.querySelector('.lr-sub').textContent = hit ? hit.rel : 'Not created yet';
+    if (hit) row.addEventListener('click', () => openWikiLink(target, t));
+    host.appendChild(row);
+  });
+  // incoming
+  head('Linked mentions', backlinks.loading ? null : backlinks.items.length);
+  if (backlinks.loading) host.appendChild(emptyNote('Searching…'));
+  else if (!backlinks.items.length) host.appendChild(emptyNote(folder ? 'No pages link here yet' : 'Open a folder to see backlinks'));
+  backlinks.items.forEach(h => {
+    const row = document.createElement('button');
+    row.className = 'link-row';
+    row.innerHTML = '<span class="lr-title"></span><span class="lr-sub"></span>';
+    row.querySelector('.lr-title').textContent = h.name.replace(/\.(md|markdown)$/i, '');
+    row.querySelector('.lr-sub').textContent = h.snippet || '';
+    row.addEventListener('click', () => { navStack.push(t.path); navForward.length = 0; openTauriPath(h.path); });
+    host.appendChild(row);
+  });
+}
+
+function emptyNote(text) {
+  const d = document.createElement('div');
+  d.className = 'links-empty'; d.textContent = text;
+  return d;
+}
+
+/* ---- ⌘P — jump to any page by title ---- */
+function openPageJump() {
+  if (!folder) { toast('Open a folder to jump between pages'); return; }
+  buildPageIndex();
+  openCmd();
+  cmdState.pageMode = true;
+  $('cmd-input').placeholder = 'Jump to a page…';
+  filterCmd('');
+  $('cmd-input').focus();
+}
+
 /* ---------- Link navigation history ---------- */
 
 const navStack = [];    // paths we came FROM (⌘[)
@@ -1294,7 +1691,9 @@ function navFwd() {
 
 /* html-producing converters (md / text / docx / sheet) */
 async function buildHtml(kind, { text, bytes }) {
-  if (kind === 'md') return DOMPurify.sanitize(md.render(text));
+  // frontmatter is the property system — rendered by the property panel, not
+  // as document body (markdown-it would otherwise emit it as <hr> + text)
+  if (kind === 'md') return DOMPurify.sanitize(md.render(splitFm(text).body), { ADD_ATTR: ['data-wiki'] });
   if (kind === 'text') {
     const pre = document.createElement('pre');
     pre.className = 'plaintext';
@@ -1670,7 +2069,7 @@ async function makeTab(base, kind, { text, bytes }) {
     tab.html = DOMPurify.sanitize(text);      // for TOC / mind map / export
   } else if (kind !== 'unsupported') {
     tab.html = await buildHtml(kind, { text, bytes });
-    if (TEXT_KINDS.includes(kind)) tab.text = text;
+    if (TEXT_KINDS.includes(kind)) { tab.text = text; tab.fm = splitFm(text).fm; }
   }
   return tab;
 }
@@ -2117,7 +2516,11 @@ function richToMarkdown(t) {
     k.replaceWith(document.createTextNode('$' + (ann ? ann.textContent : '') + '$'));
   });
   clone.querySelectorAll('[contenteditable]').forEach(el => el.removeAttribute('contenteditable'));
-  return htmlToMarkdown(clone.innerHTML);
+  // (wikilinks are restored by a turndown rule in htmlToMarkdown — a text node
+  //  here would get its brackets escaped to \[\[…\]\])
+  // frontmatter lives outside the editable body — re-attach it verbatim so a
+  // rich-edit round-trip can never drop the page's properties
+  return (t.fm || '') + htmlToMarkdown(clone.innerHTML);
 }
 
 /* ---------- Editor history (undo/redo) ----------
@@ -2601,6 +3004,7 @@ function cmdActions() {
   if (t && t.kind === 'pptx') list.push({ id: 'present', label: 'Present (full-screen slideshow)', hint: '', icon: 'present', run: () => { closeCmd(); startPresentation(); } });
   if (t && t.kind !== 'unsupported') list.push({ id: 'map', label: 'Open mind map', hint: '⌘M', icon: 'map', run: () => { closeCmd(); toggleMap(); } });
   list.push({ id: 'ai', label: 'Open AI assistant', hint: '⌘J', icon: 'ai', filled: true, run: () => { closeCmd(); if ($('ai-panel').hidden) toggleAiPanel(); } });
+  if (folder) list.push({ id: 'jump', label: 'Jump to a page', hint: '⌘P', icon: 'doc', run: () => { closeCmd(); setTimeout(openPageJump, 0); } });
   if (t) list.push({ id: 'summarize', label: 'Summarize this document', hint: 'AI', icon: 'ai', filled: true, run: () => { closeCmd(); toggleAiPanel(true); if (typeof aiQuick === 'function') aiQuick('summarize'); } });
   if (t) list.push({ id: 'export', label: 'Export…', hint: '', icon: 'export', run: () => { closeCmd(); openExportDialog(); } });
   list.push({ id: 'open-folder', label: 'Open a folder (wiki mode)', hint: '⌘⇧O', icon: 'doc', run: () => { closeCmd(); if (typeof openFolder === 'function') openFolder(); } });
@@ -2617,6 +3021,7 @@ function cmdActions() {
 function openCmd() {
   cmdState.items = cmdActions();
   cmdState.idx = 0;
+  cmdState.pageMode = false;
   cmdState.searchItems = []; cmdState.searchQuery = '';   // no stale hits from last time
   $('cmd-overlay').hidden = false;
   $('cmd-input').value = '';
@@ -2630,6 +3035,22 @@ let _searchTimer = 0, _searchToken = 0;
 function filterCmd(q) {
   const lq = q.toLowerCase().trim();
   cmdState.query = lq;
+  // ⌘P page-jump: titles only, no commands, no content search
+  if (cmdState.pageMode) {
+    if (pageIndex.dirty) buildPageIndex();
+    const scored = pageIndex.pages
+      .map(p => ({ p, i: p.title.toLowerCase().indexOf(lq) }))
+      .filter(x => !lq || x.i > -1 || x.p.rel.toLowerCase().includes(lq))
+      .sort((a, b) => (a.i < 0) - (b.i < 0) || a.i - b.i || a.p.title.localeCompare(b.p.title))
+      .slice(0, 50);
+    cmdState.filtered = scored.map(({ p }) => ({
+      page: true, label: p.title, hint: p.rel, icon: 'doc',
+      run: () => { closeCmd(); const t = activeTab(); if (t && t.path) { navStack.push(t.path); navForward.length = 0; } openTauriPath(p.path); },
+    }));
+    cmdState.idx = Math.min(cmdState.idx, Math.max(0, cmdState.filtered.length - 1));
+    renderCmd();
+    return;
+  }
   const cmds = lq ? cmdState.items.filter(a => a.label.toLowerCase().includes(lq)) : cmdState.items;
   // content-search results (folder / wiki mode) sit below the commands
   const hits = (lq.length >= 2 && cmdState.searchQuery === lq) ? cmdState.searchItems : [];
@@ -3435,6 +3856,7 @@ function onEditorChange() {
   const t = activeTab();
   if (!t || !t.editing) return;
   t.text = cm.getValue();
+  t.fm = splitFm(t.text).fm;      // source edits can change the frontmatter directly
   setDirty(t, true);
   clearTimeout(previewTimer);
   previewTimer = setTimeout(async () => {
@@ -3442,6 +3864,8 @@ function onEditorChange() {
     if (activeId === t.id && t.editing) {
       contentEl.innerHTML = t.html;
       fixupContent(t);
+      renderProps(t);
+      decorateWikiLinks(t);
       renderEnhancements(t).then(() => { if (activeId === t.id) buildHeadingToc(); });
       buildHeadingToc();
     }
@@ -3945,6 +4369,16 @@ function htmlToMarkdown(html) {
   // underline has no markdown syntax — round-trip as inline <u> (GFM renders it,
   // and children are still converted so <u>**bold**</u> survives)
   td.addRule('underline', { filter: ['u'], replacement: (c) => c ? '<u>' + c + '</u>' : '' });
+  // [[wikilinks]] restore to their source form — a rule (not a text node) so the
+  // brackets aren't escaped to \[\[…\]\]
+  td.addRule('wikilink', {
+    filter: (n) => n.nodeName === 'A' && n.classList.contains('wikilink') && n.hasAttribute('data-wiki'),
+    replacement: (content, node) => {
+      const target = node.getAttribute('data-wiki');
+      const label = (content || '').trim();
+      return '[[' + target + (label && label !== target ? '|' + label : '') + ']]';
+    },
+  });
   // callouts → GitHub-style `> [!type]` blockquote (built directly so the
   // marker isn't escaped to \[!type\])
   td.addRule('callout', {
@@ -4435,6 +4869,7 @@ async function openFolder(root) {
   try {
     const tree = await TAURI.core.invoke('list_dir_tree', { path: root });
     folder = { root, tree };
+    pageIndex.dirty = true;                 // vault changed → re-index page titles
     settings.lastFolder = root;
     saveSettings();
     sideMode = 'files';
@@ -5416,6 +5851,7 @@ function wireGlobal() {
     else if (mod && e.key === 'i' && isRichEditing()) { e.preventDefault(); EDITOR_CMDS.italic(); }
     else if (mod && e.key === 'u' && isRichEditing()) { e.preventDefault(); EDITOR_CMDS.underline(); }
     else if (mod && e.key === 'k') { e.preventDefault(); if (isRichEditing()) openLinkPop(); else openCmd(); }
+    else if (mod && !e.shiftKey && e.key === 'p') { e.preventDefault(); openPageJump(); }
     else if (mod && !e.shiftKey && e.key === 'z' && isRichEditing()) { e.preventDefault(); editUndo(); }
     else if (mod && e.shiftKey && (e.key === 'z' || e.key === 'Z') && isRichEditing()) { e.preventDefault(); editRedo(); }
     else if (mod && e.shiftKey && (e.key === 'o' || e.key === 'O')) { e.preventDefault(); openFolder(); }

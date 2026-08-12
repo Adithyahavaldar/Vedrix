@@ -12,8 +12,8 @@
 <link rel="stylesheet" href="vendor/fonts/fonts.css">
 <link rel="stylesheet" href="vendor/katex.min.css">
 <link rel="stylesheet" href="vendor/codemirror.css">
-<link rel="stylesheet" href="app.css?v=166">
-<link rel="stylesheet" href="themes.css?v=166">
+<link rel="stylesheet" href="app.css?v=168">
+<link rel="stylesheet" href="themes.css?v=168">
 </head>
 <body>
   <div id="topbar" data-tauri-drag-region>
@@ -311,13 +311,14 @@
 
     <div id="sidebar" class="hidden">
       <div id="side-tabs" hidden>
-        <button data-m="toc" class="sel">Contents</button><button data-m="files">Files</button><button data-m="notes">Notes</button>
+        <button data-m="toc" class="sel">Contents</button><button data-m="files">Files</button><button data-m="links">Links</button><button data-m="notes">Notes</button>
       </div>
       <nav id="toc"></nav>
       <div id="files-pane" hidden>
         <div id="projects"></div>
         <div id="filetree"></div>
       </div>
+      <div id="links-pane" hidden></div>
       <div id="notes-pane" hidden></div>
     </div>
     <div id="toc-resize" title="Drag to resize sidebar"></div>
@@ -329,6 +330,7 @@
     </div>
 
     <div id="scroller" hidden>
+      <div id="props-panel" hidden></div>
       <article id="content" class="markdown-body"></article>
       <div id="pages" hidden></div>
     </div>
@@ -672,6 +674,6 @@
   window.pdfjsLib = pdfjsLib;
   window.dispatchEvent(new Event('pdfjs-ready'));
 </script>
-<script src="app.js?v=166"></script>
+<script src="app.js?v=168"></script>
 </body>
 </html>

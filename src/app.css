@@ -305,6 +305,90 @@ body.editing #context-bar, body.rich-editing #context-bar { display: none; }
   font-size: var(--reader-fs, 16px);
   background: transparent;
 }
+/* ---- N1: property panel (frontmatter), above the document body ---- */
+#props-panel {
+  max-width: var(--reader-width, 820px);
+  margin: 0 auto; padding: 26px 40px 0;
+  display: flex; flex-direction: column; gap: 1px;
+}
+#props-panel[hidden] { display: none; }
+.prop-row { display: flex; align-items: flex-start; gap: 10px; min-height: 30px; }
+.prop-key {
+  flex: 0 0 168px; display: flex; align-items: center; gap: 7px;
+  border: none; background: none; cursor: default; text-align: left;
+  color: var(--text-muted); font: inherit; font-size: 13px;
+  padding: 5px 6px; border-radius: 6px; overflow: hidden;
+}
+.prop-key span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prop-key svg { width: 14px; height: 14px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; opacity: .75; }
+.prop-val {
+  flex: 1 1 0; min-width: 0; font-size: 13.5px; color: var(--fg);
+  padding: 5px 8px; border-radius: 6px; cursor: text;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+}
+.prop-val:hover { background: var(--hover); }
+.prop-empty { color: var(--text-muted); opacity: .6; }
+.prop-chip {
+  font-size: 12px; padding: 2px 9px; border-radius: 20px;
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
+  color: var(--accent); white-space: nowrap;
+}
+.prop-check {
+  width: 17px; height: 17px; border-radius: 4px; cursor: pointer;
+  border: 1.5px solid var(--border); background: var(--bg);
+  display: grid; place-items: center; color: var(--accent-fg); padding: 0;
+}
+.prop-check.on { background: var(--accent); border-color: var(--accent); }
+.prop-check svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+.prop-input {
+  flex: 1 1 0; min-width: 0; font: inherit; font-size: 13.5px; color: var(--fg);
+  padding: 5px 8px; border-radius: 6px; border: 1px solid var(--accent); background: var(--bg);
+}
+.prop-add {
+  align-self: flex-start; display: inline-flex; align-items: center; gap: 6px;
+  margin: 4px 0 0 2px; padding: 5px 9px; border: none; background: none;
+  color: var(--text-muted); font: inherit; font-size: 12.5px; cursor: pointer; border-radius: 7px;
+  opacity: 0; transition: opacity .14s, background .12s;
+}
+#props-panel:hover .prop-add, .prop-add:focus-visible { opacity: 1; }
+.prop-add:hover { background: var(--hover); color: var(--fg); }
+.prop-add svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; }
+
+/* ---- N1: [[wikilinks]] ---- */
+.markdown-body a.wikilink, a.wikilink {
+  color: var(--accent); text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  cursor: pointer;
+}
+.markdown-body a.wikilink:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.markdown-body a.wikilink.missing, a.wikilink.missing {
+  color: var(--text-muted);
+  border-bottom: 1px dashed color-mix(in srgb, var(--text-muted) 55%, transparent);
+}
+
+/* ---- N1: Links pane (outgoing + backlinks) ---- */
+#links-pane { padding: 6px 8px 20px; overflow-y: auto; }
+#links-pane[hidden] { display: none; }
+.links-head {
+  font-size: 10.5px; font-weight: 650; letter-spacing: .07em; text-transform: uppercase;
+  color: var(--text-muted); padding: 14px 8px 6px;
+}
+.links-head:first-child { padding-top: 4px; }
+.link-row {
+  display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: left;
+  border: none; background: none; cursor: pointer; font: inherit;
+  padding: 7px 9px; border-radius: 8px; color: var(--fg);
+}
+.link-row:hover { background: var(--hover); }
+.link-row .lr-title { font-size: 13px; font-weight: 550; }
+.link-row .lr-sub {
+  font-size: 11.5px; color: var(--text-muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.link-row.missing { cursor: default; }
+.link-row.missing .lr-title { color: var(--text-muted); }
+.links-empty { font-size: 12px; color: var(--text-muted); padding: 4px 9px 8px; }
+
 html[data-font="serif"] .markdown-body { font-family: 'Newsreader', "Iowan Old Style", Georgia, serif; }
 html[data-font="mono"] .markdown-body { font-family: 'Geist Mono', ui-monospace, "SF Mono", Menlo, monospace; }
 
