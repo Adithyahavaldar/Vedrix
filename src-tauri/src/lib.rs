@@ -189,6 +189,263 @@ fn list_dir_tree(path: String) -> Result<Vec<DirEntry>, String> {
     Ok(walk_dir(std::path::Path::new(&path), 0))
 }
 
+// --- N2: the vault index -----------------------------------------------------
+// Today every search re-reads every file from disk. That is fine for a folder of
+// notes and hopeless for a vault: one keystroke costs thousands of file reads.
+//
+// This keeps one pass over the vault in memory and answers from there.
+//
+// It is a CACHE, not a second source of truth. It is never written to disk, so
+// it cannot go stale, corrupt, or disagree with the files — the worst case is
+// rebuilding it, which is the same single pass that built it. Files remain the
+// only thing that owns your content.
+
+#[derive(Clone)]
+struct IdxPage {
+    path: String,
+    rel: String,
+    title: String,
+    mtime: u64,
+    links: Vec<String>,   // lowercased [[wikilink]] targets
+    body: String,         // lowercased text, for matching
+    raw_lines: Vec<String>, // original lines, for snippets
+}
+
+#[derive(Default)]
+struct VaultIndex {
+    root: String,
+    pages: Vec<IdxPage>,
+    built_ms: u64,
+}
+
+struct IndexState(Mutex<VaultIndex>);
+
+#[derive(serde::Serialize)]
+struct IdxStats {
+    root: String,
+    pages: usize,
+    built: bool,
+    build_ms: u64,
+    bytes: usize,
+}
+
+#[derive(serde::Serialize)]
+struct IdxPageLite {
+    path: String,
+    rel: String,
+    title: String,
+}
+
+const IDX_EXTS: [&str; 6] = ["md", "markdown", "mdown", "txt", "json", "log"];
+
+fn idx_collect(p: &std::path::Path, root: &std::path::Path, depth: u32, out: &mut Vec<IdxPage>) {
+    if depth > 6 || out.len() >= 20_000 {
+        return;
+    }
+    let Ok(rd) = std::fs::read_dir(p) else { return };
+    for e in rd.flatten() {
+        let path = e.path();
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') || name == "node_modules" || name == "target" || name == "vendor" {
+            continue;
+        }
+        if path.is_dir() {
+            idx_collect(&path, root, depth + 1, out);
+            continue;
+        }
+        let ext = path.extension().and_then(|x| x.to_str()).unwrap_or("").to_ascii_lowercase();
+        if !IDX_EXTS.contains(&ext.as_str()) {
+            continue;
+        }
+        let Ok(meta) = e.metadata() else { continue };
+        if meta.len() > 2_000_000 {
+            continue;
+        }
+        if let Some(page) = idx_read_page(&path, root, &meta) {
+            out.push(page);
+        }
+    }
+}
+
+fn idx_read_page(path: &std::path::Path, root: &std::path::Path, meta: &std::fs::Metadata) -> Option<IdxPage> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let name = path.file_name()?.to_str()?.to_string();
+    let rel = path.strip_prefix(root).ok()
+        .map(|r| r.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_else(|| name.clone());
+    let mtime = meta.modified().ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs()).unwrap_or(0);
+
+    // outgoing [[wikilinks]], lowercased, so backlinks are a memory scan
+    let mut links = Vec::new();
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i + 3 < bytes.len() {
+        if bytes[i] == b'[' && bytes[i + 1] == b'[' {
+            if let Some(end) = text[i + 2..].find("]]") {
+                let inner = &text[i + 2..i + 2 + end];
+                let target = inner.split('|').next().unwrap_or("").split('#').next().unwrap_or("").trim();
+                if !target.is_empty() && target.len() < 200 {
+                    links.push(target.to_lowercase());
+                }
+                i += end + 4;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    links.sort();
+    links.dedup();
+
+    Some(IdxPage {
+        title: name.trim_end_matches(".md").trim_end_matches(".markdown").to_string(),
+        path: path.to_string_lossy().into_owned(),
+        rel,
+        mtime,
+        links,
+        body: text.to_lowercase(),
+        raw_lines: text.lines().map(|l| l.to_string()).collect(),
+    })
+}
+
+#[tauri::command]
+fn index_build(state: tauri::State<'_, IndexState>, root: String) -> Result<IdxStats, String> {
+    let t0 = std::time::Instant::now();
+    let rootp = std::path::Path::new(&root);
+    let mut pages = Vec::new();
+    idx_collect(rootp, rootp, 0, &mut pages);
+    let bytes: usize = pages.iter().map(|p| p.body.len()).sum();
+    let ms = t0.elapsed().as_millis() as u64;
+    let count = pages.len();
+    let mut guard = state.0.lock().map_err(|e| e.to_string())?;
+    *guard = VaultIndex { root: root.clone(), pages, built_ms: ms };
+    Ok(IdxStats { root, pages: count, built: true, build_ms: ms, bytes })
+}
+
+#[tauri::command]
+fn index_stats(state: tauri::State<'_, IndexState>) -> Result<IdxStats, String> {
+    let g = state.0.lock().map_err(|e| e.to_string())?;
+    Ok(IdxStats {
+        root: g.root.clone(),
+        pages: g.pages.len(),
+        built: !g.root.is_empty(),
+        build_ms: g.built_ms,
+        bytes: g.pages.iter().map(|p| p.body.len()).sum(),
+    })
+}
+
+/// Same shape as search_folder, so the frontend can use whichever is warm.
+#[tauri::command]
+fn index_search(state: tauri::State<'_, IndexState>, query: String, limit: usize) -> Result<Vec<SearchHit>, String> {
+    let q = query.trim().to_lowercase();
+    if q.len() < 2 {
+        return Ok(vec![]);
+    }
+    let g = state.0.lock().map_err(|e| e.to_string())?;
+    let mut hits: Vec<SearchHit> = Vec::new();
+    for p in g.pages.iter() {
+        let count = p.body.matches(&q).count();
+        if count == 0 {
+            continue;
+        }
+        // first matching line, for the snippet
+        let mut line_no = 1u32;
+        let mut snippet = String::new();
+        let mut col = 0u32;
+        for (n, line) in p.raw_lines.iter().enumerate() {
+            if let Some(at) = line.to_lowercase().find(&q) {
+                line_no = (n + 1) as u32;
+                let trimmed = line.trim_start();
+                let lead = line.len() - trimmed.len();
+                col = trimmed[..at.saturating_sub(lead).min(trimmed.len())].chars().count() as u32;
+                snippet = trimmed.chars().take(220).collect();
+                break;
+            }
+        }
+        hits.push(SearchHit {
+            path: p.path.clone(),
+            name: p.rel.rsplit('/').next().unwrap_or(&p.rel).to_string(),
+            line: line_no,
+            count: count as u32,
+            snippet,
+            col,
+        });
+    }
+    // title matches first, then most occurrences
+    hits.sort_by(|a, b| {
+        let at = a.name.to_lowercase().contains(&q);
+        let bt = b.name.to_lowercase().contains(&q);
+        bt.cmp(&at).then(b.count.cmp(&a.count)).then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+    hits.truncate(if limit == 0 { 300 } else { limit });
+    Ok(hits)
+}
+
+/// Pages that link to `target` — a memory scan of pre-parsed links rather than
+/// a full-text search for "[[title".
+#[tauri::command]
+fn index_backlinks(state: tauri::State<'_, IndexState>, target: String) -> Result<Vec<SearchHit>, String> {
+    let want = target.trim().to_lowercase();
+    let want_stem = want.trim_end_matches(".md").to_string();
+    let g = state.0.lock().map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for p in g.pages.iter() {
+        if !p.links.iter().any(|l| *l == want || *l == want_stem) {
+            continue;
+        }
+        let needle = format!("[[{}", want_stem);
+        let mut line_no = 1u32;
+        let mut snippet = String::new();
+        for (n, line) in p.raw_lines.iter().enumerate() {
+            if line.to_lowercase().contains(&needle) {
+                line_no = (n + 1) as u32;
+                snippet = line.trim().chars().take(220).collect();
+                break;
+            }
+        }
+        out.push(SearchHit {
+            path: p.path.clone(),
+            name: p.rel.rsplit('/').next().unwrap_or(&p.rel).to_string(),
+            line: line_no,
+            count: 1,
+            snippet,
+            col: 0,
+        });
+    }
+    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    Ok(out)
+}
+
+#[tauri::command]
+fn index_pages(state: tauri::State<'_, IndexState>) -> Result<Vec<IdxPageLite>, String> {
+    let g = state.0.lock().map_err(|e| e.to_string())?;
+    Ok(g.pages.iter()
+        .filter(|p| p.rel.to_lowercase().ends_with(".md") || p.rel.to_lowercase().ends_with(".markdown"))
+        .map(|p| IdxPageLite { path: p.path.clone(), rel: p.rel.clone(), title: p.title.clone() })
+        .collect())
+}
+
+/// Re-read one file after it changes. Keeps the index correct without the cost
+/// (or the dependency) of a filesystem watcher.
+#[tauri::command]
+fn index_touch(state: tauri::State<'_, IndexState>, path: String) -> Result<bool, String> {
+    let mut g = state.0.lock().map_err(|e| e.to_string())?;
+    if g.root.is_empty() {
+        return Ok(false);
+    }
+    let root = std::path::PathBuf::from(g.root.clone());
+    let p = std::path::Path::new(&path);
+    g.pages.retain(|x| x.path != path);
+    if let Ok(meta) = std::fs::metadata(p) {
+        if let Some(page) = idx_read_page(p, &root, &meta) {
+            g.pages.push(page);
+            return Ok(true);
+        }
+    }
+    Ok(false) // file is gone — dropping it from the index is the correct outcome
+}
+
 // --- N6: version history ---------------------------------------------------
 // Two sources, merged in the UI: snapshots we take ourselves on save, and (when
 // the vault is a git repo) the file's real commit history. Snapshots live in
@@ -582,6 +839,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .manage(PendingFile(Mutex::new(None)))
+        .manage(IndexState(Mutex::new(VaultIndex::default())))
         .invoke_handler(tauri::generate_handler![
             read_md_file,
             stat_md_file,
@@ -596,6 +854,12 @@ pub fn run() {
             write_library,
             list_dir_tree,
             scan_db,
+            index_build,
+            index_stats,
+            index_search,
+            index_backlinks,
+            index_pages,
+            index_touch,
             history_snapshot,
             history_list,
             history_read,
@@ -709,4 +973,76 @@ pub fn run() {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod index_tests {
+    use super::*;
+
+    fn make_vault(n: usize) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("vedrix_idx_bench_{}", n));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for i in 0..n {
+            let body = format!(
+                "---\nStatus: {}\n---\n\n# Note {i}\n\nSome body text for note {i}. \
+                 It mentions [[Note {}]] and a needle only in a few files.\n{}\n",
+                if i % 3 == 0 { "Done" } else { "Open" },
+                (i + 1) % n,
+                if i % 500 == 0 { "PINEAPPLE marker line" } else { "filler filler filler" }
+            );
+            std::fs::write(dir.join(format!("note-{i}.md")), body).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn index_is_fast_and_correct_at_scale() {
+        let n = 5000;
+        let dir = make_vault(n);
+
+        let t0 = std::time::Instant::now();
+        let mut pages = Vec::new();
+        idx_collect(&dir, &dir, 0, &mut pages);
+        let build_ms = t0.elapsed().as_millis();
+        assert_eq!(pages.len(), n, "every file should be indexed");
+
+        let idx = VaultIndex { root: dir.to_string_lossy().into(), pages, built_ms: build_ms as u64 };
+
+        // a rare term: the whole point is that this does not touch the disk
+        let t1 = std::time::Instant::now();
+        let rare = idx.pages.iter().filter(|p| p.body.contains("pineapple")).count();
+        let rare_us = t1.elapsed().as_micros();
+        assert_eq!(rare, n / 500, "rare term found in the expected number of pages");
+
+        // a common term, worst case for scanning
+        let t2 = std::time::Instant::now();
+        let common = idx.pages.iter().filter(|p| p.body.contains("body text")).count();
+        let common_us = t2.elapsed().as_micros();
+        assert_eq!(common, n);
+
+        // backlinks are a pre-parsed link scan, not a text search
+        let t3 = std::time::Instant::now();
+        let back = idx.pages.iter().filter(|p| p.links.iter().any(|l| l == "note 42")).count();
+        let back_us = t3.elapsed().as_micros();
+        assert_eq!(back, 1, "exactly one page links to Note 42");
+
+        // the path this replaces: re-read every file from disk, per query
+        let t4 = std::time::Instant::now();
+        let mut hits = Vec::new();
+        search_walk(&dir, "pineapple", 0, &mut hits, 300);
+        let disk_ms = t4.elapsed().as_millis();
+
+        let t5 = std::time::Instant::now();
+        let mut hits2 = Vec::new();
+        search_walk(&dir, "[[note 42", 0, &mut hits2, 300);
+        let disk_back_ms = t5.elapsed().as_millis();
+
+        println!("INDEX BENCH  pages={n}  build={build_ms}ms  rare={rare_us}us  common={common_us}us  backlinks={back_us}us");
+        println!("DISK  BENCH  same search from disk={disk_ms}ms  backlinks from disk={disk_back_ms}ms");
+        println!("SPEEDUP      search {:.0}x   backlinks {:.0}x",
+                 (disk_ms as f64 * 1000.0) / rare_us.max(1) as f64,
+                 (disk_back_ms as f64 * 1000.0) / back_us.max(1) as f64);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

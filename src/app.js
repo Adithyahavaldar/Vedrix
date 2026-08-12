@@ -1674,7 +1674,9 @@ async function loadBacklinks(t) {
   if (!t || !t.path || !folder || !TAURI) { backlinks.loading = false; return; }
   const title = t.name.replace(/\.(md|markdown|mdown)$/i, '');
   try {
-    const hits = await TAURI.core.invoke('search_folder', { root: folder.root, query: '[[' + title });
+    const hits = vaultIndex.built
+      ? await TAURI.core.invoke('index_backlinks', { target: title })
+      : await TAURI.core.invoke('search_folder', { root: folder.root, query: '[[' + title });
     backlinks.items = (hits || []).filter(h => h.path !== t.path);
   } catch (err) { backlinks.items = []; }
   backlinks.loading = false;
@@ -3087,6 +3089,17 @@ function cmdActions() {
       id: 'tpl-' + tpl.rel, label: 'New page from template: ' + tpl.title, hint: '', icon: 'doc',
       run: () => { closeCmd(); newFromTemplate(tpl); },
     }));
+    list.push({
+      id: 'reindex',
+      label: vaultIndex.built ? `Rebuild vault index (${vaultIndex.pages} pages)` : 'Build vault index',
+      hint: '', icon: 'find',
+      run: async () => {
+        closeCmd();
+        toast('Indexing…');
+        await buildVaultIndex(folder.root);
+        toast(vaultIndex.built ? `Indexed ${vaultIndex.pages} pages in ${vaultIndex.ms} ms` : 'Indexing failed');
+      },
+    });
     list.push({ id: 'ask-vault', label: 'Ask your vault (AI)', hint: 'AI', icon: 'ai', filled: true, run: () => { closeCmd(); openVaultAsk(); } });
     list.push({ id: 'history', label: 'Version history…', hint: '', icon: 'clock', run: () => { closeCmd(); openHistory(); } });
     list.push({ id: 'publish', label: 'Publish this folder as a site…', hint: '', icon: 'doc', run: () => { closeCmd(); publishSite(folder.root); } });
@@ -3160,7 +3173,9 @@ function filterCmd(q) {
     const token = ++_searchToken;
     _searchTimer = setTimeout(async () => {
       try {
-        const rows = await TAURI.core.invoke('search_folder', { root: folder.root, query: lq });
+        const rows = vaultIndex.built
+          ? await TAURI.core.invoke('index_search', { query: lq, limit: 300 })
+          : await TAURI.core.invoke('search_folder', { root: folder.root, query: lq });
         if (token !== _searchToken) return;                 // stale — user kept typing
         cmdState.searchQuery = lq;
         cmdState.searchItems = rows.map(r => ({
@@ -3989,6 +4004,7 @@ async function saveEditor(t) {
     } else return;
     setDirty(t, false);
     histMaybeSnapshot(t);          // N6: rate-limited version snapshot
+    indexTouch(t.path);            // N2: re-read just this file in the index
   } catch (err) {
     console.error('save failed', err);
   }
@@ -4977,6 +4993,32 @@ async function openReadingMode() {
 
 /* ---------- Folder mode ---------- */
 
+/* ---- N2: the vault index ----------------------------------------------------
+   One pass over the vault held in memory, so search, backlinks and page-jump
+   stop re-reading every file. Purely a cache: if it isn't ready, every caller
+   below falls back to the old disk path, so nothing depends on it existing. */
+
+const vaultIndex = { built: false, pages: 0, ms: 0, building: false };
+
+async function buildVaultIndex(root) {
+  if (!TAURI || !root || vaultIndex.building) return;
+  vaultIndex.building = true;
+  try {
+    const st = await TAURI.core.invoke('index_build', { root });
+    vaultIndex.built = true; vaultIndex.pages = st.pages; vaultIndex.ms = st.build_ms;
+    pageIndex.dirty = true;                       // titles may have changed under us
+  } catch (err) {
+    vaultIndex.built = false;                     // stay on the disk path
+    console.warn('index build failed', err);
+  } finally { vaultIndex.building = false; }
+}
+
+// Keep the index honest after a save without needing a filesystem watcher.
+function indexTouch(path) {
+  if (!TAURI || !vaultIndex.built || !path) return;
+  TAURI.core.invoke('index_touch', { path }).catch(() => {});
+}
+
 async function openFolder(root) {
   if (!TAURI) return;
   if (!root) {
@@ -4987,6 +5029,8 @@ async function openFolder(root) {
     const tree = await TAURI.core.invoke('list_dir_tree', { path: root });
     folder = { root, tree };
     pageIndex.dirty = true;                 // vault changed → re-index page titles
+    vaultIndex.built = false;
+    buildVaultIndex(root);                  // async: the UI never waits on it
     settings.lastFolder = root;
     saveSettings();
     sideMode = 'files';
@@ -8856,7 +8900,9 @@ async function vaultRetrieve(question, limit = 6) {
     // a few of the most distinctive terms is plenty — this is retrieval, not search
     for (const term of terms.slice(0, 4)) {
       try {
-        const hits = await TAURI.core.invoke('search_folder', { root: folder.root, query: term });
+        const hits = vaultIndex.built
+          ? await TAURI.core.invoke('index_search', { query: term, limit: 60 })
+          : await TAURI.core.invoke('search_folder', { root: folder.root, query: term });
         (hits || []).forEach(h => bump(byPath.get(h.path) || { path: h.path, title: h.name.replace(/\.(md|markdown)$/i, ''), rel: h.name }, Math.min(4, 1 + Math.log2(h.count || 1))));
       } catch (_) { /* search is best-effort */ }
     }
