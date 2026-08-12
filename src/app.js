@@ -8260,7 +8260,7 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
     var p=SITE.pages.filter(function(x){return x.slug===slug;})[0]||SITE.pages[0];
     // only add a title when the page doesn't already open with its own H1,
     // otherwise every page renders its name twice
-    var hasH1=/^\s*<h1[\s>]/i.test(p.html);
+    var hasH1=/^\\s*<h1[\\s>]/i.test(p.html);
     doc.innerHTML=(hasH1?'':'<h1>'+p.title.replace(/&/g,'&amp;').replace(/</g,'&lt;')+'</h1>')+p.html+
       '<div class="foot">Published from '+SITE.title.replace(/&/g,'&amp;').replace(/</g,'&lt;')+' with Vedrix'+(SITE.date?' · '+SITE.date:'')+'</div>';
     crumb.textContent=p.title;document.title=p.title+' — '+SITE.title;
