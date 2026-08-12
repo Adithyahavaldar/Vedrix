@@ -49,7 +49,8 @@ const md = window.markdownit({
     }
     return '';
   },
-}).use(window.markdownitTaskLists).use(wikiLinkPlugin);
+}).use(window.markdownitTaskLists).use(wikiLinkPlugin)
+  .use(columnsPlugin).use(blockIdPlugin).use(embedPlugin);
 
 /* ---------- Settings ---------- */
 
@@ -1110,6 +1111,8 @@ function renderActive() {
   renderProps(t);                // frontmatter → property panel
   decorateWikiLinks(t);          // resolve [[links]] against the vault
   loadBacklinks(t);              // reverse index (async)
+  renderEmbeds(t);               // ![[page]] transclusion (async)
+  renderInlineViews(t);          // ```vedrix-view database blocks (async)
   renderEnhancements(t).then(() => { if (activeId === t.id && ['md', 'docx', 'sheet'].includes(t.kind)) buildHeadingToc(); });
   if (['md', 'docx', 'sheet'].includes(t.kind)) buildHeadingToc(); else clearToc();
   applyZoom(t);
@@ -1728,7 +1731,7 @@ function navFwd() {
 async function buildHtml(kind, { text, bytes }) {
   // frontmatter is the property system — rendered by the property panel, not
   // as document body (markdown-it would otherwise emit it as <hr> + text)
-  if (kind === 'md') return DOMPurify.sanitize(md.render(splitFm(text).body), { ADD_ATTR: ['data-wiki'] });
+  if (kind === 'md') return DOMPurify.sanitize(md.render(splitFm(text).body), { ADD_ATTR: ['data-wiki', 'data-bid', 'data-embed', 'data-cols', 'open'] });
   if (kind === 'text') {
     const pre = document.createElement('pre');
     pre.className = 'plaintext';
@@ -3041,6 +3044,10 @@ function cmdActions() {
   list.push({ id: 'ai', label: 'Open AI assistant', hint: '⌘J', icon: 'ai', filled: true, run: () => { closeCmd(); if ($('ai-panel').hidden) toggleAiPanel(); } });
   if (folder) list.push({ id: 'jump', label: 'Jump to a page', hint: '⌘P', icon: 'doc', run: () => { closeCmd(); setTimeout(openPageJump, 0); } });
   if (folder) {
+    listTemplates().forEach(tpl => list.push({
+      id: 'tpl-' + tpl.rel, label: 'New page from template: ' + tpl.title, hint: '', icon: 'doc',
+      run: () => { closeCmd(); newFromTemplate(tpl); },
+    }));
     list.push({ id: 'open-db', label: 'Open this folder as a database', hint: '', icon: 'doc', run: () => { closeCmd(); createDatabaseHere(folder.root); } });
     list.push({ id: 'new-db', label: 'New database here', hint: '', icon: 'doc', run: () => { closeCmd(); createDatabaseHere(folder.root); } });
   }
@@ -3327,6 +3334,12 @@ const SLASH_ITEMS = [
   { k: 'callout note info admonition', label: 'Callout', hint: '> [!note]', run: () => insertCallout('note') },
   { k: 'callout warning', label: 'Callout: Warning', hint: '> [!warning]', run: () => insertCallout('warning') },
   { k: 'callout tip', label: 'Callout: Tip', hint: '> [!tip]', run: () => insertCallout('tip') },
+  { k: 'toggle collapse details accordion', label: 'Toggle list', hint: 'Collapsible block', run: insertToggle },
+  { k: 'columns split side by side', label: 'Columns', hint: 'Two columns', run: () => insertColumns(2) },
+  { k: 'columns three 3', label: 'Columns: 3', hint: 'Three columns', run: () => insertColumns(3) },
+  { k: 'embed transclude synced block page', label: 'Embed a page', hint: '![[page]]', run: insertEmbedPrompt },
+  { k: 'database view table inline', label: 'Database view', hint: 'Embed a database', run: insertInlineDbView },
+  { k: 'block id anchor reference', label: 'Block id', hint: 'Anchor for embeds', run: addBlockId },
 ];
 
 const slashState = { active: false, query: '', sel: null, idx: 0 };
@@ -4402,6 +4415,16 @@ async function exportCanvas(t, fmt) {
 const stem = (name) => name.replace(/\.[^.]+$/, '');
 
 function htmlToMarkdown(html) {
+  // Pre-pass: turndown short-circuits "blank" elements (no text content) before
+  // any custom rule runs, so an empty marker span can never serialize itself.
+  // Turn block-id markers into the text turndown will happily carry through.
+  if (/vx-bid/.test(html)) {
+    const tmp = document.createElement('div');
+    tmp.innerHTML = html;
+    tmp.querySelectorAll('.vx-bid[data-bid]').forEach(s =>
+      s.replaceWith(document.createTextNode(' ^' + s.getAttribute('data-bid'))));
+    html = tmp.innerHTML;
+  }
   const td = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced', bulletListMarker: '-' });
   if (window.turndownPluginGfm) td.use(turndownPluginGfm.gfm);
   // the gfm plugin emits single-tilde ~text~, which markdown-it doesn't parse —
@@ -4412,6 +4435,7 @@ function htmlToMarkdown(html) {
   // underline has no markdown syntax — round-trip as inline <u> (GFM renders it,
   // and children are still converted so <u>**bold**</u> survives)
   td.addRule('underline', { filter: ['u'], replacement: (c) => c ? '<u>' + c + '</u>' : '' });
+  registerBlockRules(td);
   // [[wikilinks]] restore to their source form — a rule (not a text node) so the
   // brackets aren't escaped to \[\[…\]\]
   td.addRule('wikilink', {
@@ -6968,5 +6992,414 @@ function wireDb() {
         if (activeTab() === t) renderDbBody();
       }).catch(() => {});
     }
+  });
+}
+
+/* ==========================================================================
+   N4 — Blocks
+
+   Notion's editor feels good because of structure you can manipulate. Every
+   block here must degrade to something a human can read in a plain text
+   editor — that is the rule that decides the syntax:
+
+     toggle        <details><summary>       valid MD, renders on GitHub
+     columns       ::: columns / :: col     literal markers, content readable
+     block id      ^b7f2                    Obsidian-compatible anchor
+     transclusion  ![[page#^b7f2]]          one source of truth, rendered live
+     inline view   ```vedrix-view fence     an N3 database embedded in a page
+
+   No proprietary JSON blobs. Each has a matching turndown rule so a rich
+   edit round-trips back to the same source.
+   ========================================================================== */
+
+/* ---------- markdown-it plugins ------------------------------------------ */
+
+// ::: columns / :: col / ::: — a container the reader can still parse by eye
+function columnsPlugin(mdit) {
+  mdit.block.ruler.before('fence', 'vxcolumns', (state, startLine, endLine, silent) => {
+    const start = state.bMarks[startLine] + state.tShift[startLine];
+    const line = state.src.slice(start, state.eMarks[startLine]).trim();
+    if (!/^:::\s*columns\s*$/i.test(line)) return false;
+    if (silent) return true;
+    let depth = 1, close = -1;
+    for (let ln = startLine + 1; ln < endLine; ln++) {
+      const l = state.src.slice(state.bMarks[ln] + state.tShift[ln], state.eMarks[ln]).trim();
+      if (/^:::\s*columns\s*$/i.test(l)) depth++;
+      else if (/^:::\s*$/.test(l)) { depth--; if (!depth) { close = ln; break; } }
+    }
+    if (close < 0) return false;                       // unterminated → not a container
+    const body = state.getLines(startLine + 1, close, 0, false);
+    const parts = body.split(/^[ \t]*::[ \t]*col[ \t]*$/mi).map(s => s.trim());
+    const token = state.push('vxcolumns', 'div', 0);
+    token.block = true;
+    token.meta = { parts: parts.length > 1 ? parts.filter((p, i) => i > 0 || p) : parts };
+    state.line = close + 1;
+    return true;
+  });
+  mdit.renderer.rules.vxcolumns = (tokens, idx) => {
+    const parts = tokens[idx].meta.parts;
+    return '<div class="vx-columns" data-cols="' + parts.length + '">' +
+      parts.map(p => '<div class="vx-col">' + mdit.render(p) + '</div>').join('') + '</div>';
+  };
+}
+
+// a trailing " ^b7f2" marks the block so it can be linked and transcluded
+function blockIdPlugin(mdit) {
+  mdit.inline.ruler.before('text', 'vxbid', (state, silent) => {
+    if (state.src.charCodeAt(state.pos) !== 0x5E) return false;   // ^
+    const m = /^\^([A-Za-z0-9_-]{2,32})[ \t]*$/.exec(state.src.slice(state.pos));
+    if (!m) return false;                                          // only at the very end
+    if (!silent) {
+      const t = state.push('html_inline', '', 0);
+      t.content = '<span class="vx-bid" data-bid="' + vxAttr(m[1]) + '" contenteditable="false"></span>';
+    }
+    state.pos = state.src.length;
+    return true;
+  });
+}
+
+// ![[page]] / ![[page#Heading]] / ![[page#^id]] on its own line → live embed
+function embedPlugin(mdit) {
+  mdit.block.ruler.before('paragraph', 'vxembed', (state, startLine, endLine, silent) => {
+    const start = state.bMarks[startLine] + state.tShift[startLine];
+    const line = state.src.slice(start, state.eMarks[startLine]).trim();
+    const m = /^!\[\[([^\]]+)\]\]$/.exec(line);
+    if (!m) return false;
+    if (silent) return true;
+    const token = state.push('vxembed', 'div', 0);
+    token.block = true;
+    token.meta = { target: m[1].trim() };
+    state.line = startLine + 1;
+    return true;
+  });
+  mdit.renderer.rules.vxembed = (tokens, idx) => {
+    const target = tokens[idx].meta.target;
+    return '<div class="vx-embed" data-embed="' + vxAttr(target) + '" contenteditable="false">' +
+      '<div class="vx-embed-head"><span class="vx-embed-src">' + escHtml(String(target)) + '</span></div>' +
+      '<div class="vx-embed-body vx-embed-load">Loading…</div></div>';
+  };
+}
+
+function vxAttr(s) { return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;'); }
+
+/* ---------- transclusion: resolve, slice, render -------------------------- */
+
+// "#Heading" → that section; "#^id" → the block carrying that id; else whole page
+function extractFragment(text, frag) {
+  const body = splitFm(text).body;
+  if (!frag) return body.trim();
+  if (frag.startsWith('^')) {
+    const id = frag.slice(1);
+    const re = new RegExp('\\^' + id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[ \\t]*$');
+    const lines = body.split(/\r?\n/);
+    const hit = lines.findIndex(l => re.test(l));
+    if (hit < 0) return '';
+    // walk back to the start of that block (blank line or start of file)
+    let from = hit;
+    while (from > 0 && lines[from - 1].trim()) from--;
+    return lines.slice(from, hit + 1).join('\n').replace(re, '').trim();
+  }
+  const lines = body.split(/\r?\n/);
+  const want = frag.trim().toLowerCase();
+  const at = lines.findIndex(l => /^#{1,6}\s+/.test(l) && l.replace(/^#{1,6}\s+/, '').trim().toLowerCase() === want);
+  if (at < 0) return '';
+  const level = (lines[at].match(/^#+/) || ['#'])[0].length;
+  let end = lines.length;
+  for (let i = at + 1; i < lines.length; i++) {
+    const m = lines[i].match(/^(#{1,6})\s+/);
+    if (m && m[1].length <= level) { end = i; break; }
+  }
+  return lines.slice(at, end).join('\n').trim();
+}
+
+async function renderEmbeds(t) {
+  const nodes = [...contentEl.querySelectorAll('.vx-embed[data-embed]:not([data-vx-done])')];
+  for (const el of nodes) {
+    el.setAttribute('data-vx-done', '1');
+    const raw = el.getAttribute('data-embed') || '';
+    const hash = raw.indexOf('#');
+    const target = (hash > -1 ? raw.slice(0, hash) : raw).trim();
+    const frag = hash > -1 ? raw.slice(hash + 1).trim() : '';
+    const body = el.querySelector('.vx-embed-body');
+    const head = el.querySelector('.vx-embed-head');
+    const hit = resolveWiki(target);
+    if (!hit) {
+      body.className = 'vx-embed-body vx-embed-missing';
+      body.textContent = 'No page named “' + target + '”';
+      continue;
+    }
+    if (head) {
+      const open = document.createElement('button');
+      open.className = 'vx-embed-open';
+      open.textContent = 'Open';
+      open.title = 'Open ' + hit.title;
+      open.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openWikiLink(target); });
+      head.appendChild(open);
+    }
+    try {
+      const text = TAURI ? (await TAURI.core.invoke('read_md_file', { path: hit.path })).text
+                         : ((window.__dbMock && window.__dbMock.files[hit.path]) || '');
+      const slice = extractFragment(text, frag);
+      if (!slice) {
+        body.className = 'vx-embed-body vx-embed-missing';
+        body.textContent = frag ? 'Nothing found at “' + frag + '” in ' + hit.title : hit.title + ' is empty';
+        continue;
+      }
+      body.className = 'vx-embed-body markdown-body';
+      body.innerHTML = DOMPurify.sanitize(md.render(slice), { ADD_ATTR: ['data-wiki', 'data-bid', 'data-embed', 'data-cols'] });
+      body.querySelectorAll('.vx-embed').forEach(n => n.remove());   // one level deep only
+    } catch (err) {
+      body.className = 'vx-embed-body vx-embed-missing';
+      body.textContent = 'Could not read ' + hit.title;
+    }
+  }
+}
+
+/* ---------- inline database view (```vedrix-view) ------------------------- */
+
+async function renderInlineViews(t) {
+  const blocks = [...contentEl.querySelectorAll('pre > code.language-vedrix-view, pre > code.language-vedrix')]
+    .map(c => c.parentElement)
+    .filter(p => !p.hasAttribute('data-vx-done'));
+  for (const pre of blocks) {
+    pre.setAttribute('data-vx-done', '1');
+    const spec = parseYamlLite(pre.textContent || '') || {};
+    const host = document.createElement('div');
+    host.className = 'vx-dbview';
+    host.contentEditable = 'false';
+    host.dataset.spec = pre.textContent || '';
+    pre.replaceWith(host);
+    const folderName = String(spec.folder || spec.database || '').trim();
+    if (!folderName) { host.innerHTML = '<div class="vx-dbview-empty">Set <code>folder:</code> to embed a database.</div>'; continue; }
+    const root = folder && folder.root;
+    const path = /^[/~]|^[A-Za-z]:/.test(folderName) ? folderName : (root ? root.replace(/[/\\]+$/, '') + '/' + folderName : folderName);
+    try {
+      const loaded = await dbLoad(path);
+      const view = (loaded.schema.views || []).find(v => String(v.name).toLowerCase() === String(spec.view || '').toLowerCase())
+                 || loaded.schema.views[0] || { type: 'table' };
+      renderInlineTable(host, loaded, view, spec, path);
+    } catch (err) {
+      host.innerHTML = '<div class="vx-dbview-empty">Could not read database “' + escHtml(String(folderName)) + '”.</div>';
+    }
+  }
+}
+
+function renderInlineTable(host, loaded, view, spec, path) {
+  const head = document.createElement('div');
+  head.className = 'vx-dbview-head';
+  head.appendChild(Object.assign(document.createElement('span'), { className: 'vx-dbview-name', textContent: loaded.schema.name || 'Database' }));
+  head.appendChild(Object.assign(document.createElement('span'), { className: 'vx-dbview-view', textContent: view.name || 'Table' }));
+  const open = document.createElement('button');
+  open.className = 'vx-dbview-open';
+  open.textContent = 'Open database';
+  open.addEventListener('click', () => openDatabase(path));
+  head.appendChild(open);
+  host.appendChild(head);
+
+  const prev = db;
+  db = loaded;                                  // dbVisibleRows reads the module state
+  let rows;
+  try {
+    const idx = loaded.schema.views.indexOf(view);
+    loaded.viewIdx = idx < 0 ? 0 : idx;
+    rows = dbVisibleRows();
+  } finally { db = prev; }
+
+  const limit = Number(spec.limit) > 0 ? Number(spec.limit) : 8;
+  const shown = rows.slice(0, limit);
+  const props = Object.keys(loaded.schema.properties || {}).slice(0, 3);
+  const wrap = document.createElement('div');
+  wrap.className = 'vx-dbview-wrap';
+  const table = document.createElement('table');
+  const thead = document.createElement('thead');
+  const hr = document.createElement('tr');
+  hr.appendChild(Object.assign(document.createElement('th'), { textContent: 'Name' }));
+  props.forEach(p => hr.appendChild(Object.assign(document.createElement('th'), { textContent: p })));
+  thead.appendChild(hr);
+  table.appendChild(thead);
+  const tb = document.createElement('tbody');
+  shown.forEach(r => {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    const a = document.createElement('button');
+    a.className = 'vx-dbview-row';
+    a.textContent = r.title;
+    a.addEventListener('click', () => { if (TAURI && r.path) openTauriPath(r.path); });
+    td.appendChild(a);
+    tr.appendChild(td);
+    props.forEach(p => {
+      const cell = document.createElement('td');
+      const v = (loaded.schema.properties[p] || {}).type === 'select' ? '' : '';
+      const text = Array.isArray(r.props[p]) ? r.props[p].join(', ') : (r.props[p] == null ? '' : String(r.props[p]));
+      if (text && (loaded.schema.properties[p] || {}).type === 'select') {
+        const pill = document.createElement('span');
+        pill.className = 'db-pill';
+        pill.textContent = text;
+        pill.style.setProperty('--pill', dbOptColor(p, text));
+        cell.appendChild(pill);
+      } else cell.textContent = text || '—';
+      tr.appendChild(cell);
+    });
+    tb.appendChild(tr);
+  });
+  table.appendChild(tb);
+  wrap.appendChild(table);
+  host.appendChild(wrap);
+  const foot = document.createElement('div');
+  foot.className = 'vx-dbview-foot';
+  foot.textContent = rows.length > limit ? `Showing ${limit} of ${rows.length}` : `${rows.length} ${rows.length === 1 ? 'page' : 'pages'}`;
+  host.appendChild(foot);
+}
+
+/* ---------- insert (slash menu) ------------------------------------------ */
+
+function insertToggle() {
+  const d = document.createElement('details');
+  d.open = true;
+  const s = document.createElement('summary');
+  s.textContent = 'Toggle';
+  const p = document.createElement('p');
+  p.innerHTML = '<br>';
+  d.appendChild(s);
+  d.appendChild(p);
+  insertBlockAfterCurrent(d);
+  placeCaretIn(s);
+}
+
+function insertColumns(n = 2) {
+  const wrap = document.createElement('div');
+  wrap.className = 'vx-columns';
+  wrap.dataset.cols = String(n);
+  for (let i = 0; i < n; i++) {
+    const col = document.createElement('div');
+    col.className = 'vx-col';
+    const p = document.createElement('p');
+    p.innerHTML = '<br>';
+    col.appendChild(p);
+    wrap.appendChild(col);
+  }
+  insertBlockAfterCurrent(wrap);
+  placeCaretIn(wrap.querySelector('.vx-col p'));
+}
+
+function insertEmbedPrompt() {
+  const blk = currentBlock();
+  if (!blk) return;
+  // type the syntax for them and leave the caret inside the brackets
+  const p = document.createElement('p');
+  p.textContent = '![[]]';
+  insertBlockAfterCurrent(p);
+  const tn = p.firstChild;
+  const sel = getSelection();
+  const r = document.createRange();
+  r.setStart(tn, 3); r.setEnd(tn, 3);
+  sel.removeAllRanges(); sel.addRange(r);
+  toast('Type a page name between the brackets');
+}
+
+function insertInlineDbView() {
+  const pre = document.createElement('pre');
+  const code = document.createElement('code');
+  code.className = 'language-vedrix-view';
+  code.textContent = 'folder: ' + ((folder && folder.root) ? '' : '') + '\nview: Table\nlimit: 8';
+  pre.appendChild(code);
+  insertBlockAfterCurrent(pre);
+  placeCaretIn(code);
+  toast('Set folder: to a database folder name');
+}
+
+function addBlockId() {
+  const blk = currentBlock();
+  if (!blk) { toast('Put the caret in a block first'); return; }
+  if (blk.querySelector('.vx-bid')) { toast('This block already has an id'); return; }
+  const id = Math.random().toString(36).slice(2, 6) + Math.random().toString(36).slice(2, 4);
+  const span = document.createElement('span');
+  span.className = 'vx-bid';
+  span.dataset.bid = id;
+  span.contentEditable = 'false';
+  blk.appendChild(document.createTextNode(' '));
+  blk.appendChild(span);
+  onRichInput();
+  navigator.clipboard && navigator.clipboard.writeText('![[' + (activeTab() ? activeTab().name.replace(/\.md$/i, '') : '') + '#^' + id + ']]')
+    .then(() => toast('Block id ^' + id + ' — embed syntax copied'), () => toast('Block id ^' + id));
+}
+
+function placeCaretIn(el) {
+  if (!el) return;
+  const sel = getSelection();
+  const r = document.createRange();
+  r.selectNodeContents(el);
+  r.collapse(false);
+  sel.removeAllRanges();
+  sel.addRange(r);
+}
+
+/* ---------- templates ----------------------------------------------------- */
+
+const TEMPLATE_DIR = '_templates';
+
+function listTemplates() {
+  if (!folder) return [];
+  if (pageIndex.dirty) buildPageIndex();
+  return pageIndex.pages.filter(p => /(^|[/\\])_templates[/\\]/i.test(p.rel));
+}
+
+async function newFromTemplate(tpl) {
+  if (!TAURI || !folder) { toast('Open a folder first'); return; }
+  try {
+    const src = (await TAURI.core.invoke('read_md_file', { path: tpl.path })).text;
+    const stamp = new Date();
+    const filled = src
+      .replace(/\{\{date\}\}/gi, stamp.toISOString().slice(0, 10))
+      .replace(/\{\{time\}\}/gi, stamp.toTimeString().slice(0, 5))
+      .replace(/\{\{title\}\}/gi, tpl.title);
+    let name = tpl.title + '.md', n = 2;
+    const taken = new Set(pageIndex.pages.map(p => p.title.toLowerCase()));
+    while (taken.has(name.replace(/\.md$/i, '').toLowerCase())) { name = tpl.title + ' ' + (n++) + '.md'; }
+    const path = folder.root.replace(/[/\\]+$/, '') + '/' + name;
+    await TAURI.core.invoke('write_file', { path, contents: filled });
+    pageIndex.dirty = true;
+    await openTauriPath(path);
+    toast('Created ' + name);
+  } catch (err) {
+    console.error(err);
+    toast('Could not create the page');
+  }
+}
+
+/* ---------- turndown: every block returns to its source form -------------- */
+
+function registerBlockRules(td) {
+  // <details> — convert children so nested markdown survives the round-trip
+  td.addRule('vxtoggle', {
+    filter: (n) => n.nodeName === 'DETAILS',
+    replacement: (content, node) => {
+      const clone = node.cloneNode(true);
+      const sum = clone.querySelector('summary');
+      const title = sum ? sum.textContent.trim() : 'Toggle';
+      if (sum) sum.remove();
+      const inner = htmlToMarkdown(clone.innerHTML).trim();
+      return '\n\n<details><summary>' + title + '</summary>\n\n' + inner + '\n\n</details>\n\n';
+    },
+  });
+  td.addRule('vxcolumns', {
+    filter: (n) => n.nodeType === 1 && n.classList && n.classList.contains('vx-columns'),
+    replacement: (content, node) => {
+      const cols = [...node.querySelectorAll(':scope > .vx-col')]
+        .map(c => htmlToMarkdown(c.innerHTML).trim());
+      return '\n\n::: columns\n' + cols.map(c => ':: col\n' + c).join('\n') + '\n:::\n\n';
+    },
+  });
+  td.addRule('vxbid', {
+    filter: (n) => n.nodeType === 1 && n.classList && n.classList.contains('vx-bid'),
+    replacement: (content, node) => ' ^' + (node.getAttribute('data-bid') || ''),
+  });
+  td.addRule('vxembed', {
+    filter: (n) => n.nodeType === 1 && n.classList && n.classList.contains('vx-embed'),
+    replacement: (content, node) => '\n\n![[' + (node.getAttribute('data-embed') || '') + ']]\n\n',
+  });
+  td.addRule('vxdbview', {
+    filter: (n) => n.nodeType === 1 && n.classList && n.classList.contains('vx-dbview'),
+    replacement: (content, node) => '\n\n```vedrix-view\n' + (node.dataset.spec || '').trim() + '\n```\n\n',
   });
 }
