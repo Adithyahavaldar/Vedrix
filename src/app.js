@@ -541,12 +541,16 @@ function showHome() {
   renderHome();
   showPane('home');
   $('context-bar').hidden = true;
-  document.querySelectorAll('#nav-rail .nr-btn').forEach(b => b.classList.toggle('sel', b.dataset.nav === 'home'));
+  document.querySelectorAll('#nav-rail .nr-btn').forEach(b => {
+    const on = b.dataset.nav === 'home';
+    b.classList.toggle('sel', on);
+    if (on) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+  });
 }
 
 function hideHome() {
   homeShown = false;
-  document.querySelectorAll('#nav-rail .nr-btn').forEach(b => b.classList.remove('sel'));
+  document.querySelectorAll('#nav-rail .nr-btn').forEach(b => { b.classList.remove('sel'); b.removeAttribute('aria-current'); });
   renderActive();
 }
 
@@ -608,7 +612,7 @@ function wireHome() {
     else if (nav2 === 'projects') { hideHome(); sideMode = 'files'; sidebarCollapsed = false; renderProjects(); updateSidebar(); }
     else if (nav2 === 'graph') { hideHome(); if (typeof toggleGraph === 'function') toggleGraph(); }
     else if (nav2 === 'history') { hideHome(); $('history-panel').hidden = false; }
-    else if (nav2 === 'settings') { hideHome(); $('settings-overlay').hidden = false; }
+    else if (nav2 === 'settings') { hideHome(); if (typeof a11yRemember === 'function') a11yRemember(); $('settings-overlay').hidden = false; }
   });
   $('home-new').addEventListener('click', () => { hideHome(); openViaPicker(); });
   $('home-new-canvas').addEventListener('click', () => newCanvas());
@@ -814,6 +818,7 @@ function updateSidebar() {
   if (mode === 'notes') renderNotesPane();
   if (mode === 'links') renderLinksPane();
   document.querySelectorAll('#side-tabs button').forEach(b => b.classList.toggle('sel', b.dataset.m === mode));
+  if (typeof syncTabState === 'function') syncTabState('side-tabs', b => b.dataset.m === mode);
   $('sidebar').classList.toggle('hidden', sidebarCollapsed || (!hasToc && !hasFiles && !hasNotes));
   if (typeof reclampDocks === 'function') reclampDocks();   // freed/consumed width → re-fit both docks
 }
@@ -2836,7 +2841,10 @@ const ICON_PATHS = {
   canvas: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M9 9v11"/>',
 };
 function svgIcon(name, filled) {
-  return `<svg viewBox="0 0 24 24">${ICON_PATHS[name] || ''}</svg>`.replace('<svg ', filled ? '<svg data-filled ' : '<svg ');
+  // aria-hidden at the source: these icons sit inside controls that already
+  // carry an accessible name, and any dynamically created one would otherwise
+  // escape the one-time pass in wireA11y().
+  return `<svg viewBox="0 0 24 24" aria-hidden="true">${ICON_PATHS[name] || ''}</svg>`.replace('<svg ', filled ? '<svg data-filled ' : '<svg ');
 }
 
 /* ---------- Annotations: highlights + margin notes (reflowable docs) ----------
@@ -3106,6 +3114,7 @@ function cmdActions() {
 }
 
 function openCmd() {
+  if (typeof a11yRemember === 'function') a11yRemember();
   cmdState.items = cmdActions();
   cmdState.idx = 0;
   cmdState.pageMode = false;
@@ -3800,7 +3809,7 @@ const EDITOR_CMDS = {
   math: () => execEditorCmd(insertMathBlock),
   mermaid: () => execEditorCmd(insertMermaidBlock),
   highlight: () => execEditorCmd(toggleHighlight),
-  aa: () => { $('settings-overlay').hidden = false; },
+  aa: () => { if (typeof a11yRemember === 'function') a11yRemember(); $('settings-overlay').hidden = false; },
 };
 
 function updateToolbarState() {
@@ -4717,6 +4726,7 @@ function toast(msg) {
   let el = $('mv-toast');
   if (!el) { el = document.createElement('div'); el.id = 'mv-toast'; document.body.appendChild(el); }
   el.textContent = msg; el.classList.add('show');
+  if (typeof a11ySay === 'function') a11ySay(msg);   // toasts are silent otherwise
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.remove('show'), 1900);
 }
@@ -4759,6 +4769,7 @@ const FONT_STACKS = {
 };
 
 function openExportDialog() {
+  if (typeof a11yRemember === 'function') a11yRemember();
   const t = activeTab();
   if (!t) return;
   const avail = EXPORT_FORMATS.filter(f => !f.soon && (!f.when || f.when(t)));
@@ -6003,6 +6014,7 @@ function wireGlobal() {
   wireAnnotations();
   wireDb();
   wireComments();
+  wireA11y();
   wireSelMenu();
   wireEditorToolbar();
   wireInspector();
@@ -8528,6 +8540,7 @@ async function histReadVersion(t, entry) {
 /* ---------- history UI ----------------------------------------------------- */
 
 async function openHistory() {
+  if (typeof a11yRemember === 'function') a11yRemember();
   const t = activeTab();
   if (!t) return;
   if (!TAURI || !t.path) { toast('Save this file first — history tracks files on disk'); return; }
@@ -9158,4 +9171,229 @@ function openVaultAsk() {
   input.placeholder = 'Ask across your whole vault…';
   input.dataset.vault = '1';
   input.focus();
+}
+
+/* ==========================================================================
+   Accessibility layer — keyboard and screen-reader semantics
+
+   The app already names its 192 buttons. What was missing is the structure
+   around them: landmarks to jump between, dialog semantics with focus that
+   goes in and comes back, tablists that answer arrow keys, and live regions
+   so anything that happens without a click is actually announced.
+   ========================================================================== */
+
+/* ---------- dialogs: focus in, trapped, and restored ---------------------- */
+
+const A11Y_DIALOGS = [
+  { id: 'cmd-overlay',      label: 'Search and commands' },
+  { id: 'settings-overlay', label: 'Settings' },
+  { id: 'hist-overlay',     label: 'Version history' },
+  { id: 'export-overlay',   label: 'Export' },
+  { id: 'lang-overlay',     label: 'Choose a language' },
+];
+
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+const a11yVisible = (el) => el.offsetWidth > 0 || el.offsetHeight > 0 || el === document.activeElement;
+const focusablesIn = (root) => [...root.querySelectorAll(FOCUSABLE)].filter(a11yVisible);
+
+let _returnFocusTo = null;
+
+// The element that had focus before any dialog opened. Tracked continuously
+// because openers focus their own input synchronously — by the time a
+// MutationObserver sees `hidden` flip, document.activeElement is already
+// inside the dialog, and restoring to that returns focus to nothing.
+let _lastFocusOutsideDialog = null;
+document.addEventListener('focusin', (e) => {
+  const t = e.target;
+  if (t && t.closest && !t.closest('[role="dialog"]')) _lastFocusOutsideDialog = t;
+}, true);
+
+// Called synchronously by anything that opens a dialog. focusin alone is not
+// enough: it does not fire while the window lacks OS focus, and a MutationObserver
+// runs too late — by then the dialog has already focused its own input.
+function a11yRemember() {
+  const el = document.activeElement;
+  if (el && el.closest && !el.closest('[role="dialog"]') && el !== document.body) _lastFocusOutsideDialog = el;
+}
+
+// Keep Tab inside an open dialog. Without this, tabbing walks out into the
+// page behind it — the user is "in" a modal the keyboard has already left.
+function a11yTrapTab(e, dialog) {
+  if (e.key !== 'Tab') return;
+  const items = focusablesIn(dialog);
+  if (!items.length) return;
+  const first = items[0], last = items[items.length - 1];
+  const active = document.activeElement;
+  if (e.shiftKey && (active === first || !dialog.contains(active))) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && active === last) { e.preventDefault(); first.focus(); }
+}
+
+function a11yDialogOpened(dialog) {
+  _returnFocusTo = _returnFocusTo || _lastFocusOutsideDialog || document.activeElement;
+  // Measure AFTER layout. The dialog was `hidden` a moment ago, so in this tick
+  // every child still measures 0x0 and the visibility filter throws them all
+  // away — leaving nothing to focus and the user stranded outside the dialog.
+  // setTimeout, not requestAnimationFrame: rAF is paused while the window is
+  // hidden or unfocused, which would leave focus stranded outside the dialog
+  // exactly when a keyboard user is most likely to be relying on it. A timer
+  // still yields long enough for layout to flush.
+  setTimeout(() => {
+    if (dialog.hidden || dialog.contains(document.activeElement)) return;
+    const items = focusablesIn(dialog);
+    // .focus() on an element inside a collapsed section silently does nothing
+    const target = items.find(el => /^(INPUT|TEXTAREA)$/.test(el.tagName)) || items[0];
+    if (target) { try { target.focus(); } catch (_) {} }
+  }, 0);
+}
+
+function a11yDialogClosed() {
+  const el = _returnFocusTo;
+  _returnFocusTo = null;
+  // only restore to something still on screen and actually focusable
+  if (el && document.contains(el) && !el.hidden && (el.offsetWidth || el.offsetHeight)) {
+    try { el.focus(); return; } catch (_) {}
+  }
+  // otherwise put focus somewhere sensible rather than dropping it on <body>,
+  // where the next Tab would restart from the top of the page
+  const fallback = document.getElementById('main') || document.body;
+  if (fallback && fallback.focus) { fallback.setAttribute('tabindex', '-1'); try { fallback.focus(); } catch (_) {} }
+}
+
+// Overlays are shown/hidden by toggling `hidden` from many places, so observe
+// the attribute rather than trying to wrap every call site.
+function wireDialogs() {
+  A11Y_DIALOGS.forEach(({ id, label }) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-modal', 'true');
+    if (!el.getAttribute('aria-label')) el.setAttribute('aria-label', label);
+    el.addEventListener('keydown', (e) => a11yTrapTab(e, el));
+    new MutationObserver(() => {
+      if (el.hidden) { if (_returnFocusTo) a11yDialogClosed(); }
+      else a11yDialogOpened(el);
+    }).observe(el, { attributes: true, attributeFilter: ['hidden'] });
+  });
+}
+
+/* ---------- tablists: arrow keys, not just clicks -------------------------- */
+
+// A row of buttons is not a tablist to a screen reader unless it says so, and
+// a tablist is expected to answer ←/→/Home/End.
+function wireTablist(containerId, onSelect, selectedAttr) {
+  const host = document.getElementById(containerId);
+  if (!host) return;
+  host.setAttribute('role', 'tablist');
+  const tabs = () => [...host.querySelectorAll('button')].filter(b => !b.hidden);
+  tabs().forEach(b => b.setAttribute('role', 'tab'));
+  host.addEventListener('keydown', (e) => {
+    const list = tabs();
+    const i = list.indexOf(document.activeElement);
+    if (i < 0) return;
+    let next = null;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = list[(i + 1) % list.length];
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = list[(i - 1 + list.length) % list.length];
+    else if (e.key === 'Home') next = list[0];
+    else if (e.key === 'End') next = list[list.length - 1];
+    if (!next) return;
+    e.preventDefault();
+    next.focus();
+    next.click();
+  });
+  if (selectedAttr) selectedAttr();
+}
+
+// Reflect which tab is current. Called wherever the selection is repainted.
+function syncTabState(containerId, isSelected) {
+  const host = document.getElementById(containerId);
+  if (!host) return;
+  [...host.querySelectorAll('button')].forEach(b => {
+    const on = isSelected(b);
+    b.setAttribute('role', 'tab');
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+    b.tabIndex = on ? 0 : -1;          // roving tabindex: one stop for the whole set
+  });
+}
+
+/* ---------- announcements -------------------------------------------------- */
+
+// A single polite live region. Toasts, save state and finished AI replies all
+// go through here — otherwise they happen silently for a screen-reader user.
+function a11ySay(message, assertive) {
+  const id = assertive ? 'a11y-alert' : 'a11y-status';
+  let el = document.getElementById(id);
+  if (!el) {
+    el = document.createElement('div');
+    el.id = id;
+    el.className = 'sr-only';
+    el.setAttribute('role', assertive ? 'alert' : 'status');
+    el.setAttribute('aria-live', assertive ? 'assertive' : 'polite');
+    el.setAttribute('aria-atomic', 'true');
+    document.body.appendChild(el);
+  }
+  // re-set to the same string still needs to re-announce
+  el.textContent = '';
+  setTimeout(() => { el.textContent = String(message || ''); }, 30);
+}
+
+/* ---------- everything else ------------------------------------------------ */
+
+function wireA11y() {
+  // landmarks — #main is a div, so it needs the role to be jumpable
+  const main = document.getElementById('main');
+  if (main) { main.setAttribute('role', 'main'); if (!main.id) main.id = 'main'; }
+  const topbar = document.getElementById('topbar');
+  if (topbar) topbar.setAttribute('role', 'banner');
+  const rail = document.getElementById('nav-rail');
+  if (rail) rail.setAttribute('aria-label', 'Primary');
+  const side = document.getElementById('sidebar');
+  if (side) side.setAttribute('aria-label', 'Document sidebar');
+  const ai = document.getElementById('ai-panel');
+  if (ai) ai.setAttribute('aria-label', 'AI assistant');
+  const insp = document.getElementById('editor-inspector');
+  if (insp) insp.setAttribute('aria-label', 'Editor');
+
+  // toolbars
+  const tb = document.getElementById('edit-toolbar');
+  if (tb) { tb.setAttribute('role', 'toolbar'); tb.setAttribute('aria-label', 'Formatting'); }
+  const sb = document.getElementById('sel-bubble');
+  if (sb) { sb.setAttribute('role', 'toolbar'); sb.setAttribute('aria-label', 'Selection formatting'); }
+
+  // the command palette is a combobox over a listbox
+  const cmdInput = document.getElementById('cmd-input');
+  const cmdList = document.getElementById('cmd-list');
+  if (cmdInput && cmdList) {
+    if (!cmdList.id) cmdList.id = 'cmd-list';
+    cmdInput.setAttribute('role', 'combobox');
+    cmdInput.setAttribute('aria-expanded', 'true');
+    cmdInput.setAttribute('aria-controls', 'cmd-list');
+    cmdInput.setAttribute('aria-autocomplete', 'list');
+    cmdList.setAttribute('role', 'listbox');
+    cmdList.setAttribute('aria-label', 'Results');
+  }
+
+  // inputs that had no programmatic label
+  const label = (id, text) => { const el = document.getElementById(id); if (el && !el.getAttribute('aria-label')) el.setAttribute('aria-label', text); };
+  label('editor-ta', 'Markdown source');
+  label('ai-preset', 'AI provider preset');
+  label('restore-session', 'Reopen last session on launch');
+  label('file-input', 'Choose a file');
+  label('cmt-input', 'Comment');
+  label('ai-input', 'Message');
+
+  // decorative icons inside already-named controls must not be announced
+  document.querySelectorAll('button svg, a svg, .nr-mark svg').forEach(s => s.setAttribute('aria-hidden', 'true'));
+
+  wireDialogs();
+  wireTablist('side-tabs');
+
+  // Escape closes the topmost open dialog even when focus sits inside it
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const open = A11Y_DIALOGS.map(d => document.getElementById(d.id)).filter(el => el && !el.hidden);
+    if (!open.length) return;
+    const top = open[open.length - 1];
+    if (top.id === 'cmd-overlay') { closeCmd(); return; }
+    top.hidden = true;
+  });
 }

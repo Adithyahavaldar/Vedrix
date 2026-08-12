@@ -12,10 +12,11 @@
 <link rel="stylesheet" href="vendor/fonts/fonts.css">
 <link rel="stylesheet" href="vendor/katex.min.css">
 <link rel="stylesheet" href="vendor/codemirror.css">
-<link rel="stylesheet" href="app.css?v=176">
-<link rel="stylesheet" href="themes.css?v=176">
+<link rel="stylesheet" href="app.css?v=178">
+<link rel="stylesheet" href="themes.css?v=178">
 </head>
 <body>
+  <a class="skip-link" href="#main">Skip to content</a>
   <div id="topbar" data-tauri-drag-region>
     <button id="toc-toggle" class="icon-btn" title="Toggle sidebar (⌘B)">
       <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16"/></svg>
@@ -296,7 +297,7 @@
             <div class="home-sec-head"><span>JUMP BACK IN</span></div>
             <div id="home-recents" class="home-recent-list"></div>
           </section>
-          <aside class="home-side">
+          <aside class="home-side" aria-label="Shortcuts">
             <div class="home-ai-card" id="home-ai">
               <div class="home-ai-icon"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.9 6.1L20 10l-6.1 1.9L12 18l-1.9-6.1L4 10l6.1-1.9z"/></svg></div>
               <div><div class="home-ai-title">Vedrix AI</div><div class="home-ai-sub">Summarize, chat, and map any open document.</div></div>
@@ -699,6 +700,6 @@
   window.pdfjsLib = pdfjsLib;
   window.dispatchEvent(new Event('pdfjs-ready'));
 </script>
-<script src="app.js?v=176"></script>
+<script src="app.js?v=178"></script>
 </body>
 </html>

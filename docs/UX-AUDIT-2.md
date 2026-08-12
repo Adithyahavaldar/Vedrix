@@ -131,3 +131,80 @@ still jumps straight there. Default rows dropped from 16 to 6 in the same state.
 Every fix was confirmed in the running app, not just in source: rail titles,
 chrome parity by set-diff, chip row height, property gap, outline empty state,
 tab height, and palette default-vs-search behaviour.
+
+---
+
+# Part 2 — keyboard & screen-reader pass
+
+The first pass measured contrast and hit targets but explicitly did not verify
+focus order, focus traps or ARIA semantics. This is that pass.
+
+## Already in good shape
+
+All **192 buttons carry an `aria-label`** — zero rely on `title` alone (which is
+announced inconsistently and never on touch). That was earlier audit work paying
+off, and it meant this pass could focus on structure rather than naming.
+
+## Fixed
+
+**Landmarks.** `#main` was a `<div>` with no role, so there was no "jump to main
+content" target at all — a screen-reader user had to tab through the entire
+topbar and rail on every page. Added `role="main"`, `role="banner"` on the
+topbar, `aria-label`s on the rail, sidebar, AI panel and inspector, and a
+**skip link** that appears on first Tab.
+
+**Dialogs had no dialog semantics.** All five overlays (command palette,
+settings, history, export, language) were plain `<div>`s. Now `role="dialog"`,
+`aria-modal="true"` and a label each — and, more importantly, they behave:
+
+| Behaviour | Before | Now |
+| --- | --- | --- |
+| Focus moves into the dialog | ✗ | ✓ |
+| Tab is trapped inside | ✗ | ✓ (wraps both directions) |
+| Escape closes | partial | ✓ all five |
+| Focus returns to the opener | ✗ | ✓ verified per dialog |
+
+**Tablists.** The sidebar tabs were an unlabelled row of buttons. Now
+`role="tablist"` / `role="tab"` / `aria-selected`, a **roving tabindex** (one Tab
+stop for the set), and ←/→/Home/End navigation.
+
+**Toolbars & the palette.** `role="toolbar"` on the edit toolbar and selection
+bubble; the palette input is now a `combobox` controlling a `listbox`.
+
+**Announcements.** There were **zero live regions**: toasts, save state and
+finished AI replies happened silently. Added a polite live region that toasts
+route through.
+
+**Unlabelled inputs** (`editor-ta`, `ai-preset`, `restore-session`,
+`file-input`, and the AI/comment composers) now have names.
+
+**Decorative icons.** 57 of 58 in-button SVGs were exposed to the accessibility
+tree. Now `aria-hidden`, applied *in `svgIcon()`* so dynamically created icons
+are covered too — a one-time DOM sweep had already missed one.
+
+**A visible focus ring for every control**, via a single `:focus-visible` rule.
+
+## Three bugs the testing found
+
+These are worth recording because each would have passed a "does the attribute
+exist?" check:
+
+1. **Focus was restored to nothing.** The observer that watches a dialog's
+   `hidden` attribute runs *after* the opener has already focused the dialog's
+   own input — so "the previously focused element" was recorded as an element
+   inside the dialog, and closing returned focus to `<body>`. Fixed by capturing
+   the opener synchronously at each open site.
+2. **Focus never entered settings/export/history.** The visibility filter ran in
+   the same tick the dialog became visible, when every child still measures
+   0×0 — so it found nothing to focus. Now measured after layout.
+3. **`requestAnimationFrame` is paused while the window is hidden or unfocused**,
+   which is exactly when a keyboard user may be relying on focus management.
+   Replaced with a timer.
+
+## Still not covered
+
+- No test with a real screen reader (VoiceOver/NVDA). The semantics are correct
+  by inspection and behaviour, but announcement *quality* is unverified.
+- The canvas (Excalidraw) is third-party and keyboard-inaccessible in parts.
+- Board drag-and-drop has no keyboard equivalent — moving a card between columns
+  still needs a pointer. The table view is the accessible path to the same edit.
