@@ -12,8 +12,8 @@
 <link rel="stylesheet" href="vendor/fonts/fonts.css">
 <link rel="stylesheet" href="vendor/katex.min.css">
 <link rel="stylesheet" href="vendor/codemirror.css">
-<link rel="stylesheet" href="app.css?v=175">
-<link rel="stylesheet" href="themes.css?v=175">
+<link rel="stylesheet" href="app.css?v=176">
+<link rel="stylesheet" href="themes.css?v=176">
 </head>
 <body>
   <div id="topbar" data-tauri-drag-region>
@@ -75,6 +75,7 @@
     <span class="tb-sep"></span>
     <button class="tb" data-cmd="bold" title="Bold (⌘B)"><b>B</b></button>
     <button class="tb" data-cmd="italic" title="Italic (⌘I)"><i>I</i></button>
+    <button class="tb" data-cmd="underline" title="Underline (⌘U)"><span style="text-decoration:underline">U</span></button>
     <button class="tb" data-cmd="strike" title="Strikethrough"><s>S</s></button>
     <button class="tb tb-mono" data-cmd="code" title="Inline code">&lt;/&gt;</button>
     <button class="tb" data-cmd="highlight" title="Highlight"><mark style="padding:0 3px">H</mark></button>
@@ -85,8 +86,8 @@
     <button class="tb tb-ic" data-cmd="task" title="To-do checkbox"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="7" height="7" rx="1.5"/><path d="M4.5 7.5l1.5 1.5 2.5-3M14 7h6M14 17h6M3 15h7v5H3z"/></svg></button>
     <span class="tb-sep"></span>
     <button class="tb tb-ic" data-cmd="hr" title="Divider"><svg viewBox="0 0 24 24"><path d="M4 12h16"/></svg></button>
-    <button class="tb tb-ic" data-cmd="table" title="Insert table"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M9 4v16"/></svg></button>
-    <button class="tb tb-ic" data-cmd="image" title="Insert image"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.6"/><path d="M4 18l5-5 4 4 3-3 4 4"/></svg></button>
+    <button class="tb tb-ic" data-cmd="table" title="Table"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M9 4v16"/></svg></button>
+    <button class="tb tb-ic" data-cmd="image" title="Image"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.6"/><path d="M4 18l5-5 4 4 3-3 4 4"/></svg></button>
     <button class="tb tb-ic" data-cmd="math" title="Math block"><svg viewBox="0 0 24 24"><path d="M5 5h9l-5 14M6 12h6"/></svg></button>
     <button class="tb tb-ic" data-cmd="mermaid" title="Diagram block"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="6" rx="1.5"/><rect x="14" y="15" width="7" height="6" rx="1.5"/><path d="M6.5 9v3a3 3 0 0 0 3 3h8"/></svg></button>
     <span class="spacer"></span>
@@ -267,7 +268,7 @@
 
   <div id="main">
     <nav id="nav-rail" hidden>
-      <button class="nr-mark" id="nr-home2" title="Home"><svg viewBox="150 455 930 660"><g fill="currentColor" stroke="currentColor" stroke-width="24" stroke-linejoin="round" stroke-linecap="round"><path d="M175 482 L388 482 L540 792 L675 843 L675 858 L598 858 L585 1082 L470 1082 Z"/><path d="M802 604 L1042 604 L936 850 L726 850 Z"/></g></svg></button>
+      <button class="nr-mark" id="nr-home2" title="Vedrix — home" aria-label="Vedrix home"><svg viewBox="150 455 930 660"><g fill="currentColor" stroke="currentColor" stroke-width="24" stroke-linejoin="round" stroke-linecap="round"><path d="M175 482 L388 482 L540 792 L675 843 L675 858 L598 858 L585 1082 L470 1082 Z"/><path d="M802 604 L1042 604 L936 850 L726 850 Z"/></g></svg></button>
       <button class="nr-btn" data-nav="home" title="Home"><svg viewBox="0 0 24 24"><path d="M4 11l8-6 8 6v8a1 1 0 0 1-1 1h-5v-6h-4v6H5a1 1 0 0 1-1-1z"/></svg></button>
       <button class="nr-btn" data-nav="files" title="Files"><svg viewBox="0 0 24 24"><rect x="8" y="3" width="13" height="14" rx="2"/><path d="M4 7v10a4 4 0 0 0 4 4h9"/></svg></button>
       <button class="nr-btn" data-nav="projects" title="Projects"><svg viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></svg></button>
@@ -698,6 +699,6 @@
   window.pdfjsLib = pdfjsLib;
   window.dispatchEvent(new Event('pdfjs-ready'));
 </script>
-<script src="app.js?v=175"></script>
+<script src="app.js?v=176"></script>
 </body>
 </html>

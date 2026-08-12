@@ -793,6 +793,20 @@ function updateSidebar() {
   if (mode === 'notes' && !hasNotes) mode = 'toc';
   if (mode === 'links' && !hasLinks) mode = 'toc';
   tocEl.hidden = mode !== 'toc';
+  // C3: a short document has no outline. Say so, rather than showing an
+  // unexplained empty panel where content is expected.
+  const emptyId = 'toc-empty';
+  let emptyEl2 = document.getElementById(emptyId);
+  if (mode === 'toc' && !hasToc && at) {
+    if (!emptyEl2) {
+      emptyEl2 = document.createElement('div');
+      emptyEl2.id = emptyId;
+      emptyEl2.className = 'side-empty';
+      emptyEl2.innerHTML = '<b>No outline</b>This document has no headings yet. Add a heading and it will appear here.';
+      tocEl.parentNode.insertBefore(emptyEl2, tocEl.nextSibling);
+    }
+    emptyEl2.hidden = false;
+  } else if (emptyEl2) emptyEl2.hidden = true;
   $('files-pane').hidden = mode !== 'files';
   $('filetree').hidden = !folder;
   $('notes-pane').hidden = mode !== 'notes';
@@ -3085,7 +3099,9 @@ function cmdActions() {
   if (t && t.kind !== 'canvas' && t.kind !== 'unsupported') list.push({ id: 'ai-board', label: 'Turn into a canvas board (AI)', hint: 'AI', icon: 'canvas', run: () => { closeCmd(); toggleAiPanel(true); aiToCanvas(); } });
   if (t && TEXT_KINDS.includes(t.kind)) list.push({ id: 'present-md', label: 'Present as slides', hint: '⌘⇧P', icon: 'present', run: () => { closeCmd(); startMdPresentation(); } });
   if (t && ['pdf', 'docx', 'html'].includes(t.kind)) list.push({ id: 'edit-md', label: 'Edit as Markdown', hint: '', icon: 'pencil', run: () => { closeCmd(); editAsMarkdown(); } });
-  for (const th of THEMES) list.push({ id: 'theme:' + th.key, label: 'Theme: ' + th.label, hint: '', icon: 'theme', sw: th.sw, run: () => { settings.theme = th.key; saveSettings(); applySettings(); closeCmd(); } });
+  // `onlyWhenSearching`: themes stay instantly reachable by name (⌘K "dracula")
+  // without occupying 10 of the palette's default rows.
+  for (const th of THEMES) list.push({ id: 'theme:' + th.key, label: 'Theme: ' + th.label, hint: '', icon: 'theme', sw: th.sw, onlyWhenSearching: true, run: () => { settings.theme = th.key; saveSettings(); applySettings(); closeCmd(); } });
   return list;
 }
 
@@ -3122,7 +3138,8 @@ function filterCmd(q) {
     renderCmd();
     return;
   }
-  const cmds = lq ? cmdState.items.filter(a => a.label.toLowerCase().includes(lq)) : cmdState.items;
+  const cmds = lq ? cmdState.items.filter(a => a.label.toLowerCase().includes(lq))
+                  : cmdState.items.filter(a => !a.onlyWhenSearching);
   // content-search results (folder / wiki mode) sit below the commands
   const hits = (lq.length >= 2 && cmdState.searchQuery === lq) ? cmdState.searchItems : [];
   cmdState.filtered = [...cmds, ...hits];
