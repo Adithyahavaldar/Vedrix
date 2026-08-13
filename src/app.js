@@ -6530,13 +6530,38 @@ const dbOptColor = (key, opt) => DB_SELECT_COLORS[
 /* ---------- writes: every edit is one surgical frontmatter rewrite -------- */
 
 async function dbSetRowProp(row, key, value) {
-  const text = await dbFs.read(row.path);
-  const next = fmSet(text, key, value === '' || value == null ? null : value);
-  if (next !== text) await dbFs.write(row.path, next);
-  if (value === '' || value == null) delete row.props[key]; else row.props[key] = value;
-  // keep an open tab for this file in sync so the editor doesn't clobber it
+  const v = value === '' || value == null ? null : value;
   const open = tabs.find(t => t.path === row.path);
-  if (open) { open.text = next; if (activeTab() === open) renderActive(); }
+
+  if (open && open.dirty) {
+    // The file is open with unsaved edits, so the copy on disk is STALE.
+    // Editing that copy and pushing it into the tab would silently destroy
+    // whatever the user has typed — and the tab, still marked dirty, would
+    // then save the clobbered text back over it. Edit the live buffer instead
+    // and let the normal save path write body and property together.
+    const next = fmSet(open.text || '', key, v);
+    open.text = next;
+    open.fm = splitFm(next).fm;
+    if (activeTab() === open) {
+      open.html = await buildHtml(open.kind, { text: next });
+      renderActive();
+    }
+    setDirty(open, true);
+    await saveEditor(open);
+  } else {
+    const text = await dbFs.read(row.path);
+    const next = fmSet(text, key, v);
+    if (next !== text) await dbFs.write(row.path, next);
+    if (open) {
+      open.text = next;
+      open.fm = splitFm(next).fm;
+      if (activeTab() === open) {
+        open.html = await buildHtml(open.kind, { text: next });
+        renderActive();
+      }
+    }
+  }
+  if (v == null) delete row.props[key]; else row.props[key] = v;
 }
 
 async function dbNewRow() {
@@ -7109,7 +7134,7 @@ async function openDatabase(folderPath) {
   if (!folderPath) { toast('Open a folder first'); return; }
   const name = folderPath.split(/[/\\]/).filter(Boolean).pop() || 'Database';
   const existing = tabs.find(t => t.kind === 'db' && t.dbFolder === folderPath);
-  if (existing) { activate(existing.id); return; }
+  if (existing) { switchTab(existing.id); return; }
   const tab = await makeTab({ name, mtime: 0 }, 'db', { text: '' });
   tab.dbFolder = folderPath;
   tab.kind = 'db';
