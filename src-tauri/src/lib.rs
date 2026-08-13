@@ -189,6 +189,114 @@ fn list_dir_tree(path: String) -> Result<Vec<DirEntry>, String> {
     Ok(walk_dir(std::path::Path::new(&path), 0))
 }
 
+// --- File operations -----------------------------------------------------
+// The app could open, read and write files but never create, rename, copy or
+// remove one. Everything below is deliberately conservative: nothing
+// overwrites an existing file, and nothing is ever unlinked.
+
+#[tauri::command]
+fn path_exists(path: String) -> bool {
+    std::path::Path::new(&path).exists()
+}
+
+/// Create a file only if the path is free. Returns the path actually used.
+#[tauri::command]
+fn create_file(path: String, contents: String) -> Result<String, String> {
+    let p = std::path::Path::new(&path);
+    if p.exists() {
+        return Err("A file with that name already exists".into());
+    }
+    if let Some(dir) = p.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(p, contents).map_err(|e| e.to_string())?;
+    Ok(path)
+}
+
+#[tauri::command]
+fn create_dir(path: String) -> Result<String, String> {
+    let p = std::path::Path::new(&path);
+    if p.exists() {
+        return Err("A folder with that name already exists".into());
+    }
+    std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
+    Ok(path)
+}
+
+#[tauri::command]
+fn rename_path(from: String, to: String) -> Result<String, String> {
+    let src = std::path::Path::new(&from);
+    let dst = std::path::Path::new(&to);
+    if !src.exists() {
+        return Err("The original file is gone".into());
+    }
+    if dst.exists() {
+        return Err("A file with that name already exists".into());
+    }
+    std::fs::rename(src, dst).map_err(|e| e.to_string())?;
+    Ok(to)
+}
+
+#[tauri::command]
+fn duplicate_path(path: String) -> Result<String, String> {
+    let src = std::path::Path::new(&path);
+    if !src.is_file() {
+        return Err("Only files can be duplicated".into());
+    }
+    let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("copy");
+    let ext = src.extension().and_then(|s| s.to_str()).unwrap_or("");
+    let dir = src.parent().ok_or("no parent folder")?;
+    for n in 1..500 {
+        let name = if n == 1 { format!("{stem} copy") } else { format!("{stem} copy {n}") };
+        let cand = dir.join(if ext.is_empty() { name.clone() } else { format!("{name}.{ext}") });
+        if !cand.exists() {
+            std::fs::copy(src, &cand).map_err(|e| e.to_string())?;
+            return Ok(cand.to_string_lossy().into_owned());
+        }
+    }
+    Err("Too many copies".into())
+}
+
+/// Move to the vault's own trash instead of unlinking. Deleting a note should
+/// never be the one action in the app that cannot be undone, and this works
+/// the same on every platform.
+#[tauri::command]
+fn trash_path(root: String, path: String) -> Result<String, String> {
+    let src = std::path::Path::new(&path);
+    if !src.exists() {
+        return Err("That file is already gone".into());
+    }
+    let name = src.file_name().and_then(|s| s.to_str()).ok_or("bad file name")?;
+    let bin = std::path::Path::new(&root).join(".vedrix").join("trash");
+    std::fs::create_dir_all(&bin).map_err(|e| e.to_string())?;
+    let stamp = now_secs();
+    let dest = bin.join(format!("{stamp}-{name}"));
+    // rename is atomic within a volume; fall back to copy+remove across volumes
+    if std::fs::rename(src, &dest).is_err() {
+        std::fs::copy(src, &dest).map_err(|e| e.to_string())?;
+        std::fs::remove_file(src).map_err(|e| e.to_string())?;
+    }
+    Ok(dest.to_string_lossy().into_owned())
+}
+
+/// Put a trashed file back where it came from — the undo for trash_path.
+#[tauri::command]
+fn restore_trashed(trashed: String, original: String) -> Result<String, String> {
+    let src = std::path::Path::new(&trashed);
+    let dst = std::path::Path::new(&original);
+    if !src.exists() {
+        return Err("That file is no longer in the trash".into());
+    }
+    if dst.exists() {
+        return Err("Something already exists at the original path".into());
+    }
+    if let Some(dir) = dst.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    std::fs::rename(src, dst).map_err(|e| e.to_string())?;
+    Ok(original)
+}
+
 // --- N2: the vault index -----------------------------------------------------
 // Today every search re-reads every file from disk. That is fine for a folder of
 // notes and hopeless for a vault: one keystroke costs thousands of file reads.
@@ -854,6 +962,13 @@ pub fn run() {
             write_library,
             list_dir_tree,
             scan_db,
+            path_exists,
+            create_file,
+            create_dir,
+            rename_path,
+            duplicate_path,
+            trash_path,
+            restore_trashed,
             index_build,
             index_stats,
             index_search,

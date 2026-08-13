@@ -3082,6 +3082,16 @@ function cmdActions() {
   if (t && t.kind === 'pdf') list.push({ id: 'reader', label: 'Reading mode (PDF → Markdown)', hint: '', icon: 'swap', run: () => { closeCmd(); openReadingMode(); } });
   if (t && t.kind === 'pptx') list.push({ id: 'present', label: 'Present (full-screen slideshow)', hint: '', icon: 'present', run: () => { closeCmd(); startPresentation(); } });
   if (t && t.kind !== 'unsupported') list.push({ id: 'map', label: 'Open mind map', hint: '⌘M', icon: 'map', run: () => { closeCmd(); toggleMap(); } });
+  list.push({ id: 'new-page', label: 'New page', hint: '⌘N', icon: 'doc', run: () => { closeCmd(); newPage(); } });
+  if (folder) {
+    list.push({ id: 'new-folder', label: 'New folder…', hint: '', icon: 'doc', run: () => { closeCmd(); newFolder(); } });
+    const t0 = activeTab();
+    if (t0 && t0.path) {
+      list.push({ id: 'rename', label: 'Rename this file…', hint: '', icon: 'doc', run: () => { closeCmd(); renameFile(t0.path); } });
+      list.push({ id: 'duplicate', label: 'Duplicate this file', hint: '', icon: 'doc', run: () => { closeCmd(); duplicateFile(t0.path); } });
+      list.push({ id: 'trash', label: 'Move this file to trash', hint: '', icon: 'doc', run: () => { closeCmd(); trashFile(t0.path); } });
+    }
+  }
   list.push({ id: 'ai', label: 'Open AI assistant', hint: '⌘J', icon: 'ai', filled: true, run: () => { closeCmd(); if ($('ai-panel').hidden) toggleAiPanel(); } });
   if (folder) list.push({ id: 'jump', label: 'Jump to a page', hint: '⌘P', icon: 'doc', run: () => { closeCmd(); setTimeout(openPageJump, 0); } });
   if (folder) {
@@ -5057,8 +5067,9 @@ function renderFileTree() {
   const head = document.createElement('div');
   head.className = 'ft-head';
   head.innerHTML = `<span class="ft-root"></span>
-    <button class="icon-btn" id="ft-graph" title="Knowledge graph (⌘G)">◉</button>
-    <button class="icon-btn" id="ft-close" title="Close folder">✕</button>`;
+    <button class="icon-btn" id="ft-new" title="New page (⌘N)" aria-label="New page">+</button>
+    <button class="icon-btn" id="ft-graph" title="Knowledge graph (⌘G)" aria-label="Knowledge graph">◉</button>
+    <button class="icon-btn" id="ft-close" title="Close folder" aria-label="Close folder">✕</button>`;
   head.querySelector('.ft-root').textContent = folder.root.split('/').pop();
   host.appendChild(head);
   const build = (entries, parent) => {
@@ -5067,6 +5078,7 @@ function renderFileTree() {
         const det = document.createElement('details');
         const sum = document.createElement('summary');
         sum.textContent = e.name;
+        sum.addEventListener('contextmenu', (ev) => openFileMenu(ev, e.path, true));
         det.appendChild(sum);
         build(e.children, det);
         parent.appendChild(det);
@@ -5076,11 +5088,14 @@ function renderFileTree() {
         btn.textContent = e.name;
         btn.dataset.path = e.path;
         btn.addEventListener('click', () => openTauriPath(e.path));
+        btn.addEventListener('contextmenu', (ev) => openFileMenu(ev, e.path, false));
         parent.appendChild(btn);
       }
     }
   };
   build(folder.tree, host);
+  const newBtn = head.querySelector('#ft-new');
+  if (newBtn) newBtn.addEventListener('click', () => newPage());
   head.querySelector('#ft-graph').addEventListener('click', toggleGraph);
   head.querySelector('#ft-close').addEventListener('click', closeFolder);
   markActiveFile();
@@ -5805,6 +5820,8 @@ async function openSampleDoc() {
 }
 
 function wireEmpty() {
+  const emptyNew = $('empty-new');
+  if (emptyNew) emptyNew.addEventListener('click', () => newPage());
   $('empty-open').addEventListener('click', () => openViaPicker());
   $('empty-sample').addEventListener('click', openSampleDoc);
 }
@@ -6019,6 +6036,7 @@ function wireGlobal() {
       e.preventDefault();
       if (isRichEditing()) EDITOR_CMDS.bold(); else toggleSidebar();
     }
+    else if (mod && e.key === 'n' && !e.shiftKey) { e.preventDefault(); newPage(); }
     else if (mod && e.key === 'i' && isRichEditing()) { e.preventDefault(); EDITOR_CMDS.italic(); }
     else if (mod && e.key === 'u' && isRichEditing()) { e.preventDefault(); EDITOR_CMDS.underline(); }
     else if (mod && e.key === 'k') { e.preventDefault(); if (isRichEditing()) openLinkPop(); else openCmd(); }
@@ -9467,4 +9485,252 @@ function wireA11y() {
     if (top.id === 'cmd-overlay') { closeCmd(); return; }
     top.hidden = true;
   });
+}
+
+/* ==========================================================================
+   File operations — the primitives the app was missing
+
+   Everything above this line assumed a file already existed. You could open,
+   read, annotate, query and publish notes, but you could not make one, rename
+   one, copy one, or get rid of one. This adds those.
+
+   Nothing here overwrites: a name that is taken gets a number. Nothing here
+   unlinks: "delete" moves the file into the vault's own trash, and the toast
+   that follows can put it straight back.
+   ========================================================================== */
+
+const NEW_PAGE_BODY = (title) => `# ${title}\n\n`;
+
+// Where a new page should land: the folder of whatever you're looking at,
+// falling back to the vault root.
+function newPageDir() {
+  const t = activeTab();
+  if (t && t.kind === 'db' && t.dbFolder) return t.dbFolder;
+  if (t && t.path && folder && t.path.startsWith(folder.root)) {
+    return t.path.slice(0, t.path.lastIndexOf('/'));
+  }
+  return folder ? folder.root : null;
+}
+
+function uniqueName(dir, base, ext = '.md') {
+  const taken = new Set((pageIndex.pages || []).map(p => (p.path || '').toLowerCase()));
+  let name = base + ext, n = 2;
+  while (taken.has((dir + '/' + name).toLowerCase())) name = `${base} ${n++}${ext}`;
+  return name;
+}
+
+/* ---------- create ---------------------------------------------------------- */
+
+async function newPage(opts = {}) {
+  const dir = opts.dir || newPageDir();
+
+  // No folder open: still let the user write. It becomes a scratch page that
+  // ⌘S turns into a real file wherever they choose.
+  if (!TAURI || !dir) {
+    const tab = await makeTab({ name: 'Untitled.md', mtime: 0 }, 'md', { text: NEW_PAGE_BODY('Untitled') });
+    tab.scratch = true; tab.editing = true; tab.editSurface = 'rich';
+    addTab(tab);
+    historyReset(); setTimeout(historySnapshot, 80);
+    toast('New page — ⌘S to save it as a file');
+    return tab;
+  }
+
+  const title = opts.title || 'Untitled';
+  const name = uniqueName(dir, title);
+  const path = dir.replace(/[/\\]+$/, '') + '/' + name;
+  try {
+    await TAURI.core.invoke('create_file', { path, contents: NEW_PAGE_BODY(name.replace(/\.md$/i, '')) });
+    pageIndex.dirty = true;
+    indexTouch(path);
+    await refreshFolderTree();
+    const tab = await openTauriPath(path);
+    // land in the editor with the title selected — you came here to type
+    setTimeout(() => {
+      const t = activeTab();
+      if (t && t.path === path && !t.editing) toggleEdit();
+      setTimeout(selectTitleLine, 120);
+    }, 120);
+    toast('Created ' + name);
+    return tab;
+  } catch (err) {
+    toast(String(err && err.message ? err.message : err));
+  }
+}
+
+// Put the caret on the H1 so the first thing you type is the title.
+function selectTitleLine() {
+  const h1 = contentEl && contentEl.querySelector('h1');
+  if (!h1) return;
+  const r = document.createRange();
+  r.selectNodeContents(h1);
+  const sel = getSelection();
+  sel.removeAllRanges();
+  sel.addRange(r);
+  h1.scrollIntoView({ block: 'center' });
+}
+
+async function newFolder() {
+  if (!TAURI || !folder) { toast('Open a folder first (⌘⇧O)'); return; }
+  const base = newPageDir() || folder.root;
+  const name = await askName('New folder', 'Folder name', 'Untitled folder');
+  if (!name) return;
+  try {
+    await TAURI.core.invoke('create_dir', { path: base.replace(/[/\\]+$/, '') + '/' + name });
+    await refreshFolderTree();
+    toast('Created ' + name);
+  } catch (err) { toast(String(err && err.message ? err.message : err)); }
+}
+
+/* ---------- rename / duplicate / trash -------------------------------------- */
+
+async function renameFile(path) {
+  if (!TAURI || !path) return;
+  const current = path.split('/').pop();
+  const stem = current.replace(/\.[^.]+$/, '');
+  const ext = current.slice(stem.length);
+  const next = await askName('Rename', 'New name', stem);
+  if (!next || next === stem) return;
+  const dest = path.slice(0, path.lastIndexOf('/') + 1) + next + ext;
+  try {
+    await TAURI.core.invoke('rename_path', { from: path, to: dest });
+    // follow the file: an open tab should not keep pointing at a dead path
+    const open = tabs.find(t => t.path === path);
+    if (open) { open.path = dest; open.name = next + ext; renderTabStrip(); updateContextBar(open); }
+    pageIndex.dirty = true;
+    indexTouch(path); indexTouch(dest);
+    await refreshFolderTree();
+    toast('Renamed to ' + next + ext);
+  } catch (err) { toast(String(err && err.message ? err.message : err)); }
+}
+
+async function duplicateFile(path) {
+  if (!TAURI || !path) return;
+  try {
+    const copy = await TAURI.core.invoke('duplicate_path', { path });
+    pageIndex.dirty = true;
+    indexTouch(copy);
+    await refreshFolderTree();
+    toast('Duplicated → ' + copy.split('/').pop());
+    return copy;
+  } catch (err) { toast(String(err && err.message ? err.message : err)); }
+}
+
+async function trashFile(path) {
+  if (!TAURI || !path || !folder) { toast('Open a folder first'); return; }
+  const name = path.split('/').pop();
+  try {
+    const trashed = await TAURI.core.invoke('trash_path', { root: folder.root, path });
+    const open = tabs.find(t => t.path === path);
+    if (open) closeTab(open.id);
+    pageIndex.dirty = true;
+    indexTouch(path);
+    await refreshFolderTree();
+    // deleting a note must never be the one thing you cannot take back
+    toastAction(`Moved “${name}” to trash`, 'Undo', async () => {
+      try {
+        await TAURI.core.invoke('restore_trashed', { trashed, original: path });
+        pageIndex.dirty = true; indexTouch(path);
+        await refreshFolderTree();
+        toast('Restored ' + name);
+      } catch (err) { toast(String(err && err.message ? err.message : err)); }
+    });
+  } catch (err) { toast(String(err && err.message ? err.message : err)); }
+}
+
+/* ---------- shared helpers --------------------------------------------------- */
+
+async function refreshFolderTree() {
+  if (!TAURI || !folder) return;
+  try {
+    folder.tree = await TAURI.core.invoke('list_dir_tree', { path: folder.root });
+    renderFileTree();
+    updateSidebar();
+  } catch (_) {}
+}
+
+// A small in-app name prompt. window.prompt is suppressed in some webviews,
+// which would make every one of these actions silently do nothing.
+function askName(title, label, initial) {
+  return new Promise(resolve => {
+    const ov = document.createElement('div');
+    ov.className = 'name-overlay';
+    ov.setAttribute('role', 'dialog');
+    ov.setAttribute('aria-modal', 'true');
+    ov.setAttribute('aria-label', title);
+    ov.innerHTML = `<div class="name-card">
+        <div class="name-title"></div>
+        <label class="name-label"></label>
+        <input class="name-input" type="text" spellcheck="false">
+        <div class="name-actions">
+          <button class="name-cancel">Cancel</button>
+          <button class="name-ok">OK</button>
+        </div>
+      </div>`;
+    ov.querySelector('.name-title').textContent = title;
+    ov.querySelector('.name-label').textContent = label;
+    const input = ov.querySelector('.name-input');
+    input.value = initial || '';
+    document.body.appendChild(ov);
+    setTimeout(() => { input.focus(); input.select(); }, 20);
+
+    let settled = false;
+    const done = (val) => {
+      if (settled) return;
+      settled = true;
+      ov.remove();
+      resolve(val);
+    };
+    const clean = (s) => String(s || '').trim().replace(/[/\\:*?"<>|]/g, '-').slice(0, 120);
+    ov.querySelector('.name-ok').addEventListener('click', () => done(clean(input.value) || null));
+    ov.querySelector('.name-cancel').addEventListener('click', () => done(null));
+    ov.addEventListener('mousedown', (e) => { if (e.target === ov) done(null); });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); done(clean(input.value) || null); }
+      else if (e.key === 'Escape') { e.preventDefault(); done(null); }
+      else if (e.key === 'Tab') {
+        // keep focus inside: this is a modal
+        const items = [...ov.querySelectorAll('input, button')];
+        const i = items.indexOf(document.activeElement);
+        const next = e.shiftKey ? items[(i - 1 + items.length) % items.length] : items[(i + 1) % items.length];
+        e.preventDefault(); next.focus();
+      }
+    });
+  });
+}
+
+/* ---------- context menu on the file tree ------------------------------------ */
+
+function openFileMenu(e, path, isDir) {
+  e.preventDefault();
+  e.stopPropagation();
+  document.querySelectorAll('.file-menu').forEach(m => m.remove());
+  const menu = document.createElement('div');
+  menu.className = 'file-menu';
+  menu.setAttribute('role', 'menu');
+  const item = (label, fn, danger) => {
+    const b = document.createElement('button');
+    b.setAttribute('role', 'menuitem');
+    b.textContent = label;
+    if (danger) b.className = 'danger';
+    b.addEventListener('click', () => { menu.remove(); fn(); });
+    menu.appendChild(b);
+  };
+  if (isDir) {
+    item('New page here', () => newPage({ dir: path }));
+    item('New folder here', () => newFolder());
+  } else {
+    item('Open', () => openTauriPath(path));
+    item('Duplicate', () => duplicateFile(path));
+  }
+  item('Rename…', () => renameFile(path));
+  item('Move to trash', () => trashFile(path), true);
+  document.body.appendChild(menu);
+  const x = Math.min(e.clientX, window.innerWidth - 190);
+  const y = Math.min(e.clientY, window.innerHeight - menu.offsetHeight - 10);
+  menu.style.left = x + 'px';
+  menu.style.top = y + 'px';
+  menu.querySelector('button').focus();
+  const close = (ev) => { if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('mousedown', close); } };
+  setTimeout(() => document.addEventListener('mousedown', close), 0);
+  menu.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') { menu.remove(); } });
 }

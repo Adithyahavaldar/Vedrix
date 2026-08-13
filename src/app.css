@@ -2333,3 +2333,42 @@ select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
 }
 [role="dialog"] :focus-visible { outline-color: var(--accent); }
 @media (prefers-reduced-motion: reduce) { .skip-link { transition: none; } }
+
+/* ---- File operations: name prompt, context menu ---- */
+.name-overlay {
+  position: fixed; inset: 0; z-index: 200; background: rgba(8,12,22,.5);
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+}
+.name-card {
+  width: min(400px, 92vw); background: var(--bg); border: 1px solid var(--border);
+  border-radius: 12px; padding: 18px; display: flex; flex-direction: column; gap: 10px;
+  box-shadow: 0 26px 60px -26px rgba(0,0,0,.6);
+}
+.name-title { font-size: 15px; font-weight: 650; color: var(--fg); }
+.name-label { font-size: 12px; color: var(--text-muted); }
+.name-input {
+  height: 36px; padding: 0 11px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--panel); color: var(--fg); font: inherit; font-size: 14px;
+}
+.name-input:focus { outline: none; border-color: var(--accent); }
+.name-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }
+.name-actions button {
+  height: 32px; padding: 0 14px; border-radius: 8px; font: inherit; font-size: 13px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--panel); color: var(--fg);
+}
+.name-actions .name-ok { background: var(--accent); color: var(--accent-fg); border-color: transparent; font-weight: 600; }
+.name-actions button:hover { filter: brightness(1.06); }
+
+.file-menu {
+  position: fixed; z-index: 210; min-width: 176px; padding: 5px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 18px 42px -18px rgba(0,0,0,.55); display: flex; flex-direction: column; gap: 1px;
+}
+.file-menu button {
+  text-align: left; border: none; background: none; font: inherit; font-size: 13px;
+  color: var(--fg); padding: 7px 10px; border-radius: 6px; cursor: pointer;
+}
+.file-menu button:hover, .file-menu button:focus-visible { background: var(--hover); }
+.file-menu button.danger { color: #dc2626; }
+.file-menu button.danger:hover { background: color-mix(in srgb, #dc2626 12%, transparent); }
+#ft-new { font-size: 16px; line-height: 1; }
