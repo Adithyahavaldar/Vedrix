@@ -5078,7 +5078,9 @@ function renderFileTree() {
         const det = document.createElement('details');
         const sum = document.createElement('summary');
         sum.textContent = e.name;
+        sum.dataset.path = e.path;                 // makes the folder a drop target
         sum.addEventListener('contextmenu', (ev) => openFileMenu(ev, e.path, true));
+        wireTreeDrag(sum, e.path, true);
         det.appendChild(sum);
         build(e.children, det);
         parent.appendChild(det);
@@ -5087,13 +5089,16 @@ function renderFileTree() {
         btn.className = 'ft-file';
         btn.textContent = e.name;
         btn.dataset.path = e.path;
-        btn.addEventListener('click', () => openTauriPath(e.path));
+        btn.addEventListener('click', () => { if (!treeDrag.active) openTauriPath(e.path); });
         btn.addEventListener('contextmenu', (ev) => openFileMenu(ev, e.path, false));
+        wireTreeDrag(btn, e.path, false);
         parent.appendChild(btn);
       }
     }
   };
   build(folder.tree, host);
+  const rootEl = head.querySelector('.ft-root');
+  if (rootEl) rootEl.dataset.path = folder.root;   // drop here to move to the vault root
   const newBtn = head.querySelector('#ft-new');
   if (newBtn) newBtn.addEventListener('click', () => newPage());
   head.querySelector('#ft-graph').addEventListener('click', toggleGraph);
@@ -9723,6 +9728,7 @@ function openFileMenu(e, path, isDir) {
     item('Duplicate', () => duplicateFile(path));
   }
   item('Rename…', () => renameFile(path));
+  item('Move to…', () => moveToPrompt(path));
   item('Move to trash', () => trashFile(path), true);
   document.body.appendChild(menu);
   const x = Math.min(e.clientX, window.innerWidth - 190);
@@ -9733,4 +9739,215 @@ function openFileMenu(e, path, isDir) {
   const close = (ev) => { if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('mousedown', close); } };
   setTimeout(() => document.addEventListener('mousedown', close), 0);
   menu.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') { menu.remove(); } });
+}
+
+/* ==========================================================================
+   Drag a file or folder onto another folder to move it.
+
+   Pointer events rather than HTML5 drag-and-drop, for the same reason as the
+   board: HTML5 DnD does not work with touch, and this tree is used on Android.
+
+   A drop is refused before it happens — invalid targets never highlight — and
+   the move is undoable from the toast. "Move to…" in the context menu does the
+   same thing from the keyboard, so this is not the one feature you need a
+   pointer for.
+   ========================================================================== */
+
+const treeDrag = { path: null, isDir: false, ghost: null, target: null, active: false };
+
+// The folder a row belongs to (files) or is (folders).
+function rowDir(el) {
+  if (!el) return null;
+  if (el.tagName === 'SUMMARY') return el.dataset.path || null;
+  const p = el.dataset.path;
+  return p ? p.slice(0, p.lastIndexOf('/')) : null;
+}
+
+// Refuse the drop up front, so an impossible target never lights up.
+function canDropOn(dirPath) {
+  if (!treeDrag.path || !dirPath) return false;
+  const srcDir = treeDrag.path.slice(0, treeDrag.path.lastIndexOf('/'));
+  if (dirPath === srcDir) return false;                    // already there
+  if (dirPath === treeDrag.path) return false;             // onto itself
+  // a folder may not be dropped inside its own subtree — the destructive case
+  if (treeDrag.isDir && (dirPath + '/').startsWith(treeDrag.path + '/')) return false;
+  return true;
+}
+
+function dropTargetAt(x, y) {
+  const el = document.elementFromPoint(x, y);
+  if (!el) return null;
+  const row = el.closest('#filetree summary[data-path], #filetree .ft-file[data-path], .ft-root');
+  if (!row) return null;
+  if (row.classList.contains('ft-root')) return folder ? folder.root : null;
+  return rowDir(row);
+}
+
+function clearDropMarks() {
+  document.querySelectorAll('.ft-drop').forEach(n => n.classList.remove('ft-drop'));
+}
+
+function markDropTarget(x, y) {
+  clearDropMarks();
+  const dir = dropTargetAt(x, y);
+  treeDrag.target = canDropOn(dir) ? dir : null;
+  if (!treeDrag.target) return;
+  const el = document.elementFromPoint(x, y);
+  const row = el && el.closest('#filetree summary[data-path], #filetree .ft-file[data-path], .ft-root');
+  if (!row) return;
+  // highlight the FOLDER being dropped into, not the file under the cursor
+  const marked = row.classList.contains('ft-file') ? row.parentElement.querySelector(':scope > summary') || row : row;
+  marked.classList.add('ft-drop');
+}
+
+function wireTreeDrag(el, path, isDir) {
+  el.addEventListener('pointerdown', (e) => {
+    if (e.button != null && e.button !== 0) return;
+    const startX = e.clientX, startY = e.clientY;
+    let dragging = false;
+
+    const onMove = (ev) => {
+      if (!dragging) {
+        if (Math.hypot(ev.clientX - startX, ev.clientY - startY) < 6) return;
+        dragging = true;
+        treeDrag.active = true;
+        treeDrag.path = path;
+        treeDrag.isDir = isDir;
+        el.classList.add('ft-dragging');
+        document.body.classList.add('tree-dragging');
+        const g = document.createElement('div');
+        g.className = 'ft-ghost';
+        g.textContent = path.split('/').pop();
+        document.body.appendChild(g);
+        treeDrag.ghost = g;
+        try { el.setPointerCapture(e.pointerId); } catch (_) {}
+      }
+      treeDrag.ghost.style.left = (ev.clientX + 12) + 'px';
+      treeDrag.ghost.style.top = (ev.clientY + 10) + 'px';
+      markDropTarget(ev.clientX, ev.clientY);
+    };
+
+    const onUp = async (ev) => {
+      el.removeEventListener('pointermove', onMove);
+      el.removeEventListener('pointerup', onUp);
+      el.removeEventListener('pointercancel', onUp);
+      if (treeDrag.ghost) { treeDrag.ghost.remove(); treeDrag.ghost = null; }
+      el.classList.remove('ft-dragging');
+      document.body.classList.remove('tree-dragging');
+      clearDropMarks();
+      const target = treeDrag.target;
+      const src = treeDrag.path;
+      treeDrag.active = false; treeDrag.path = null; treeDrag.target = null;
+      if (!dragging) return;                 // a click, handled elsewhere
+      if (!target || !src) return;
+      await movePath(src, target);
+    };
+
+    el.addEventListener('pointermove', onMove);
+    el.addEventListener('pointerup', onUp);
+    el.addEventListener('pointercancel', onUp);
+  });
+}
+
+/* ---------- the move itself (shared by drag and the menu) ------------------ */
+
+async function movePath(from, toDir) {
+  if (!TAURI) { toast('Moving files needs the desktop app'); return; }
+  const name = from.split('/').pop();
+  const originalDir = from.slice(0, from.lastIndexOf('/'));
+  try {
+    const dest = await TAURI.core.invoke('move_path', { from, toDir });
+    // an open tab must follow the file rather than keep a dead path
+    const open = tabs.find(t => t.path === from);
+    if (open) { open.path = dest; renderTabStrip(); updateContextBar(open); }
+    pageIndex.dirty = true;
+    indexTouch(from); indexTouch(dest);
+    await refreshFolderTree();
+    toastAction(`Moved “${name}”`, 'Undo', async () => {
+      try {
+        await TAURI.core.invoke('move_path', { from: dest, toDir: originalDir });
+        const t2 = tabs.find(t => t.path === dest);
+        if (t2) { t2.path = from; renderTabStrip(); updateContextBar(t2); }
+        pageIndex.dirty = true; indexTouch(dest); indexTouch(from);
+        await refreshFolderTree();
+        toast('Moved back');
+      } catch (err) { toast(String(err && err.message ? err.message : err)); }
+    });
+  } catch (err) {
+    toast(String(err && err.message ? err.message : err));
+  }
+}
+
+/* ---------- keyboard path: "Move to…" ------------------------------------- */
+
+// Every folder in the vault, so a move can be made without a pointer.
+function allFolders() {
+  const out = folder ? [{ path: folder.root, label: folder.root.split('/').pop() + ' (root)' }] : [];
+  const walk = (entries, prefix) => {
+    (entries || []).forEach(e => {
+      if (!e.dir) return;
+      const label = prefix ? prefix + ' / ' + e.name : e.name;
+      out.push({ path: e.path, label });
+      walk(e.children, label);
+    });
+  };
+  if (folder) walk(folder.tree, '');
+  return out;
+}
+
+async function moveToPrompt(path) {
+  if (!folder) { toast('Open a folder first'); return; }
+  const isDir = !/\.[a-z0-9]+$/i.test(path);
+  const choices = allFolders().filter(f => {
+    treeDrag.path = path; treeDrag.isDir = isDir;
+    const ok = canDropOn(f.path);
+    treeDrag.path = null; treeDrag.isDir = false;
+    return ok;
+  });
+  if (!choices.length) { toast('Nowhere else to move it'); return; }
+  const pick = await pickFromList('Move to…', choices.map(c => c.label));
+  if (pick == null) return;
+  await movePath(path, choices[pick].path);
+}
+
+// Small keyboard-navigable chooser (↑/↓/Enter/Escape).
+function pickFromList(title, labels) {
+  return new Promise(resolve => {
+    const ov = document.createElement('div');
+    ov.className = 'name-overlay';
+    ov.setAttribute('role', 'dialog');
+    ov.setAttribute('aria-modal', 'true');
+    ov.setAttribute('aria-label', title);
+    ov.innerHTML = `<div class="name-card"><div class="name-title"></div><div class="pick-list" role="listbox"></div>
+      <div class="name-actions"><button class="name-cancel">Cancel</button></div></div>`;
+    ov.querySelector('.name-title').textContent = title;
+    const list = ov.querySelector('.pick-list');
+    let idx = 0;
+    const rows = labels.map((l, i) => {
+      const b = document.createElement('button');
+      b.className = 'pick-item';
+      b.setAttribute('role', 'option');
+      b.textContent = l;
+      b.addEventListener('click', () => done(i));
+      list.appendChild(b);
+      return b;
+    });
+    const paint = () => rows.forEach((b, i) => {
+      b.classList.toggle('on', i === idx);
+      b.setAttribute('aria-selected', i === idx ? 'true' : 'false');
+    });
+    let settled = false;
+    const done = (v) => { if (settled) return; settled = true; ov.remove(); resolve(v); };
+    ov.querySelector('.name-cancel').addEventListener('click', () => done(null));
+    ov.addEventListener('mousedown', e => { if (e.target === ov) done(null); });
+    ov.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown') { e.preventDefault(); idx = (idx + 1) % rows.length; paint(); rows[idx].scrollIntoView({ block: 'nearest' }); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); idx = (idx - 1 + rows.length) % rows.length; paint(); rows[idx].scrollIntoView({ block: 'nearest' }); }
+      else if (e.key === 'Enter') { e.preventDefault(); done(idx); }
+      else if (e.key === 'Escape') { e.preventDefault(); done(null); }
+    });
+    document.body.appendChild(ov);
+    paint();
+    setTimeout(() => rows[0] && rows[0].focus(), 20);
+  });
 }

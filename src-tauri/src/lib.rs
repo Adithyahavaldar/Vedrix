@@ -297,6 +297,52 @@ fn restore_trashed(trashed: String, original: String) -> Result<String, String> 
     Ok(original)
 }
 
+/// Move a file or folder into another folder.
+///
+/// The dangerous case is a folder dropped into its own descendant: the source
+/// would be moved inside itself and, depending on the platform, either fail
+/// halfway or take its contents with it. That is checked here rather than in
+/// the UI, because the UI is not the only caller and a dropped folder is not
+/// something the user can undo by hand.
+#[tauri::command]
+fn move_path(from: String, to_dir: String) -> Result<String, String> {
+    let src = std::path::Path::new(&from);
+    let dir = std::path::Path::new(&to_dir);
+    if !src.exists() {
+        return Err("That file is no longer there".into());
+    }
+    if !dir.is_dir() {
+        return Err("The destination is not a folder".into());
+    }
+    let name = src.file_name().ok_or("bad file name")?;
+    let dest = dir.join(name);
+
+    if dest == src {
+        return Err("It is already in that folder".into());
+    }
+    // canonicalize so ".." and symlinks cannot smuggle the check
+    let src_real = src.canonicalize().map_err(|e| e.to_string())?;
+    let dir_real = dir.canonicalize().map_err(|e| e.to_string())?;
+    if src_real.is_dir() && dir_real.starts_with(&src_real) {
+        return Err("A folder cannot be moved inside itself".into());
+    }
+    if dest.exists() {
+        return Err(format!(
+            "“{}” already exists in that folder",
+            name.to_string_lossy()
+        ));
+    }
+    if std::fs::rename(src, &dest).is_err() {
+        // different volume: copy then remove, and only for files
+        if src.is_dir() {
+            return Err("Cannot move a folder across volumes".into());
+        }
+        std::fs::copy(src, &dest).map_err(|e| e.to_string())?;
+        std::fs::remove_file(src).map_err(|e| e.to_string())?;
+    }
+    Ok(dest.to_string_lossy().into_owned())
+}
+
 // --- N2: the vault index -----------------------------------------------------
 // Today every search re-reads every file from disk. That is fine for a folder of
 // notes and hopeless for a vault: one keystroke costs thousands of file reads.
@@ -963,6 +1009,7 @@ pub fn run() {
             list_dir_tree,
             scan_db,
             path_exists,
+            move_path,
             create_file,
             create_dir,
             rename_path,
